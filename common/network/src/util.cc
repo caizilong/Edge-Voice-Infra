@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <string.h>
+#include <chrono>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -14,23 +15,21 @@ namespace network {
 
     pid_t getPid() {
         if (g_pid == 0) {
-            g_pid = ::getpid();
+            g_pid = getpid();
         }
         return g_pid;
     }
 
     pid_t getThreadId() {
-        if (t_thread_id != 0) {
-            return t_thread_id;
+        if (t_thread_id == 0) {
+            t_thread_id = static_cast<pid_t>(::syscall(SYS_gettid));
         }
-        return static_cast<pid_t>(::syscall(SYS_gettid));
+        return t_thread_id;
     }
 
     int64_t getNowMs() {
-        timeval val;
-        gettimeofday(&val, NULL);
-
-        return val.tv_sec * 1000 + val.tv_usec / 1000;
+        const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now());
+        return now.time_since_epoch().count();
     }
 
     int32_t getInt32FromNetByte(const char *buf) {
