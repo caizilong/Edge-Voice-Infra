@@ -12,6 +12,9 @@
 #include <vector>
 #include "zmq_message.h"
 
+#define ZMQ_RPC_FUN (ZMQ_REP | 0x80)
+#define ZMQ_RPC_CALL (ZMQ_REQ | 0x80)
+
 namespace StackFlows {
 class ZmqEndpoint {
 public:
