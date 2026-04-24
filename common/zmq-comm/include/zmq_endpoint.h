@@ -37,10 +37,30 @@ public:
     int timeout_;
 
 public:
-    ZmqEndpoint(const std::string& url);
+    ZmqEndpoint(const std::string& server);
+    ZmqEndpoint(const std::string& url, int mode, const msg_callback_fun& raw_call = nullptr);
     ~ZmqEndpoint();
 
-    void register_rpc_action(const std::string& action, const rpc_callback_fun& callback);
-    void register_msg_action(const std::string& action, const msg_callback_fun& callback);
+    bool is_bind();
+    void set_timeout(int ms);
+    int get_timeout();
+
+    int register_rpc_action(const std::string& action, const rpc_callback_fun& raw_call);
+    void unregister_rpc_action(const std::string& action);
+    int call_rpc_action(const std::string& action, const std::string& data, const msg_callback_fun& raw_call);
+    
+    int send_data(const std::string& raw);
+
+private:
+    std::string _rpc_list_action(ZmqEndpoint* self, const std::shared_ptr<ZmqMessage>& _None);
+    int creat(const std::string& url, const msg_callback_fun& raw_call = nullptr);
+    int creat_pub(const std::string& url);
+    int creat_push(const std::string& url);
+    int creat_pull(const std::string& url, const msg_callback_fun& raw_call);
+    int subscriber_url(const std::string& url, const msg_callback_fun& raw_call);
+    int creat_rep(const std::string& url, const msg_callback_fun& raw_call);
+    int creat_req(const std::string& url);
+    void zmq_event_loop(const msg_callback_fun& raw_call);
+    void close_zmq();
 };
 }  // namespace StackFlows

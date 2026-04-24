@@ -19,6 +19,6 @@ public:
     zmq_msg_t *get();
 
     std::string get_param(int index, const std::string &idata = "");
-    std::string set_param(std::string param0, std::string param1);
+    static std::string set_param(std::string param0, std::string param1);
 };
 }  // namespace StackFlows
