@@ -1,8 +1,3 @@
-/*
- * SPDX-FileCopyrightText: 2024 M5Stack Technology CO LTD
- *
- * SPDX-License-Identifier: MIT
- */
 #include <signal.h>
 #include <stdio.h>
 #include <sys/stat.h>

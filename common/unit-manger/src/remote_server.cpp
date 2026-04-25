@@ -1,9 +1,3 @@
-
-/*
- * SPDX-FileCopyrightText: 2024 M5Stack Technology CO LTD
- *
- * SPDX-License-Identifier: MIT
- */
 #include "remote_server.h"
 #include <StackFlowUtil.h>
 #include <simdjson.h>

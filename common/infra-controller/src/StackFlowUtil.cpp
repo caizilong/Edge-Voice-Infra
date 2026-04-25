@@ -1,8 +1,3 @@
-/*
- * SPDX-FileCopyrightText: 2024 M5Stack Technology CO LTD
- *
- * SPDX-License-Identifier: MIT
- */
 #include "StackFlowUtil.h"
 #include <glob.h>
 #include <fstream>
