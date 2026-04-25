@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 #include "zmq_endpoint.h"
+
 #define WORK_ID_NONE -100
 
 namespace StackFlows {
@@ -14,6 +15,10 @@ std::string sample_json_str_get(const std::string& json_str, const std::string& 
 int sample_get_work_id_num(const std::string& work_id);
 std::string sample_get_work_id_name(const std::string& work_id);
 std::string sample_get_work_id(int work_id_num, const std::string& unit_name);
+
+bool decode_text_stream(const std::string& in, std::string& out,
+                        std::unordered_map<int, std::string>& stream_buff);
+
 bool decode_stream(const std::string& in, std::string& out,
                    std::unordered_map<int, std::string>& stream_buff);
 

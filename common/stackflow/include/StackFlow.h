@@ -1,10 +1,9 @@
 #pragma once
 
-// #define __cplusplus 1
-
 #include <semaphore.h>
 #include <unistd.h>
 #include <iostream>
+#include <atomic>
 
 #include <eventpp/eventqueue.h>
 #include <functional>
@@ -16,10 +15,13 @@
 #include <thread>
 #include <unordered_map>
 #include "StackFlowUtil.h"
-#include "channel.h"
+#include "NodeChannel.h"
 #include "json.hpp"
 #include "zmq_endpoint.h"
+// Ensure NodeChannel is included or declared
 namespace StackFlows {
+class NodeChannel; 
+
 class StackFlow {
 public:
     typedef enum {
@@ -37,19 +39,19 @@ public:
     std::atomic<bool> exit_flage_;
     std::atomic<int> status_;
 
-    // 线程安全的事件队列，存储事件类型
     eventpp::EventQueue<int, void(const std::shared_ptr<void>&)> event_queue_;
     std::unique_ptr<std::thread> even_loop_thread_;
 
     std::unique_ptr<ZmqEndpoint> rpc_ctx_;
 
-    std::unordered_map<int, std::shared_ptr<llm_channel_obj>> llm_task_channel_;
+    // Renamed map for general task channels
+    std::unordered_map<int, std::shared_ptr<NodeChannel>> task_channels_;
 
     StackFlow(const std::string& unit_name);
     void even_loop();
     void _none_event(const std::shared_ptr<void>& arg);
 
-    template <typename T> std::shared_ptr<llm_channel_obj> get_channel(T workid) {
+    template <typename T> std::shared_ptr<NodeChannel> get_channel(T workid) {
         int _work_id_num;
         if constexpr (std::is_same<T, int>::value) {
             _work_id_num = workid;
@@ -58,13 +60,12 @@ public:
         } else {
             return nullptr;
         }
-        return llm_task_channel_.at(_work_id_num);
+        return task_channels_.at(_work_id_num);
     }
 
     std::string _rpc_setup(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data);
     void _setup(const std::shared_ptr<void>& arg) {
         std::shared_ptr<ZmqMessage> originalPtr = std::static_pointer_cast<ZmqMessage>(arg);
-        // data->get_param(0), data->get_param(1)
         std::string zmq_url = originalPtr->get_param(0);
         std::string data = originalPtr->get_param(1);
 
@@ -93,7 +94,7 @@ public:
     void _pause(const std::shared_ptr<void>& arg) {
         std::shared_ptr<ZmqMessage> originalPtr = std::static_pointer_cast<ZmqMessage>(arg);
         std::string zmq_url = originalPtr->get_param(0);
-        std::string data = originalPtr->get_param(0);
+        std::string data = originalPtr->get_param(1);
         request_id_ = sample_json_str_get(data, "request_id");
         out_zmq_url_ = zmq_url;
         if (status_.load()) pause(zmq_url, data);
@@ -105,7 +106,6 @@ public:
     std::string _rpc_taskinfo(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data);
     void _taskinfo(const std::shared_ptr<void>& arg) {
         std::shared_ptr<ZmqMessage> originalPtr = std::static_pointer_cast<ZmqMessage>(arg);
-        // data->get_param(0), data->get_param(1)
         std::string zmq_url = originalPtr->get_param(0);
         std::string data = originalPtr->get_param(1);
         request_id_ = sample_json_str_get(data, "request_id");
@@ -127,8 +127,9 @@ public:
         if (error_msg.empty()) {
             out_body["error"]["code"] = 0;
             out_body["error"]["message"] = "";
-        } else
+        } else {
             out_body["error"] = error_msg;
+        }
 
         if (zmq_url.empty()) {
             ZmqEndpoint _zmq(out_zmq_url_, ZMQ_PUSH);
@@ -162,8 +163,8 @@ public:
         ZmqEndpoint _call("sys");
         _call.call_rpc_action("release_unit", _work_id,
                               [](ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data) {});
-        llm_task_channel_[_work_id_num].reset();
-        llm_task_channel_.erase(_work_id_num);
+        task_channels_[_work_id_num].reset();
+        task_channels_.erase(_work_id_num);
         return false;
     }
     bool sys_release_unit(int work_id_num, const std::string& work_id);

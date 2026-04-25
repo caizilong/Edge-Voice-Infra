@@ -7,13 +7,10 @@
 #include <arm_neon.h>
 #endif
 
-// #include <iconv.h>
-
 std::string StackFlows::sample_json_str_get(const std::string& json_str,
                                             const std::string& json_key) {
     std::string key_val;
     std::string format_val;
-    // ALOGD("json_str: %s json_key:%s\n", json_str.c_str(), json_key.c_str());
     std::string find_key = "\"" + json_key + "\"";
     int subs_start = json_str.find(find_key);
     if (subs_start == std::string::npos) {
@@ -81,7 +78,6 @@ std::string StackFlows::sample_json_str_get(const std::string& json_str,
     if (obj_flage != 0) {
         key_val.clear();
     }
-    // ALOGD("key_val:%s\n", key_val.c_str());
     return key_val;
 }
 
@@ -130,13 +126,11 @@ void StackFlows::unicode_to_utf8(unsigned int codepoint, char* output, int* leng
     }
 }
 
-// clang-format on
-bool StackFlows::decode_stream(const std::string& in, std::string& out,
+bool StackFlows::decode_text_stream(const std::string& in, std::string& out,
                                std::unordered_map<int, std::string>& stream_buff) {
     int index = std::stoi(StackFlows::sample_json_str_get(in, "index"));
     std::string finish = StackFlows::sample_json_str_get(in, "finish");
     stream_buff[index] = StackFlows::sample_json_str_get(in, "delta");
-    // sample find flage: false:true
     if (finish.find("f") == std::string::npos) {
         for (size_t i = 0; i < stream_buff.size(); i++) {
             out += stream_buff.at(i);
@@ -145,6 +139,11 @@ bool StackFlows::decode_stream(const std::string& in, std::string& out,
         return false;
     }
     return true;
+}
+
+bool StackFlows::decode_stream(const std::string& in, std::string& out,
+                               std::unordered_map<int, std::string>& stream_buff) {
+    return decode_text_stream(in, out, stream_buff);
 }
 
 std::string StackFlows::unit_call(const std::string& unit_name, const std::string& unit_action,
@@ -161,7 +160,6 @@ std::string StackFlows::unit_call(const std::string& unit_name, const std::strin
 void StackFlows::unit_call(
         const std::string& unit_name, const std::string& unit_action, const std::string& data,
         std::function<void(const std::shared_ptr<StackFlows::ZmqMessage>&)> callback) {
-    std::string value;
     StackFlows::ZmqEndpoint _call(unit_name);
     _call.call_rpc_action(
             unit_action, data,

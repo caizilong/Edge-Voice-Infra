@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.20)
 project(unit_manager VERSION 1.6)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -12,12 +12,11 @@ set(REQUIREMENTS
 
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
-    ../hybrid-comm/include
-    ../infra-controller/include
-    ../utils
+    ../zmq-comm/include
+    ../stackflow/include
     ../network/include
     "/usr/local/include/"
-    "include" "." 
+    "include" "."
 )
 
 file(GLOB_RECURSE SRCS "src/main.cpp" 

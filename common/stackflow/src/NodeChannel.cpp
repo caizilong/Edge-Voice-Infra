@@ -1,21 +1,22 @@
-#include "channel.h"
+#include "NodeChannel.h"
 #include <iostream>
 #include "sample_log.h"
 
 using namespace StackFlows;
 
-llm_channel_obj::llm_channel_obj(const std::string& _publisher_url,
-                                 const std::string& inference_url, const std::string& unit_name)
+NodeChannel::NodeChannel(const std::string& _publisher_url,
+                         const std::string& inference_url, const std::string& unit_name)
         : unit_name_(unit_name), inference_url_(inference_url), publisher_url_(_publisher_url) {
-    // publisher_url_ = _publisher_url;
     zmq_url_index_ = -1000;
     zmq_[-1] = std::make_shared<ZmqEndpoint>(publisher_url_, ZMQ_PUB);
     zmq_[-2].reset();
 }
 
-llm_channel_obj::~llm_channel_obj() { std::cout << "llm_channel_obj 析构" << std::endl; }
+NodeChannel::~NodeChannel() { 
+    std::cout << "NodeChannel 析构" << std::endl; 
+}
 
-void llm_channel_obj::subscriber_event_call(
+void NodeChannel::subscriber_event_call(
         const std::function<void(const std::string&, const std::string&)>& call, ZmqEndpoint* _ZmqEndpoint,
         const std::shared_ptr<ZmqMessage>& raw) {
     auto _raw = raw->string();
@@ -35,11 +36,12 @@ void llm_channel_obj::subscriber_event_call(
     }
     call(sample_json_str_get(_raw, "object"), sample_json_str_get(_raw, "data"));
 }
+
 void message_handler(ZmqEndpoint* zmq_obj, const std::shared_ptr<ZmqMessage>& data) {
     std::cout << "Received: " << data->string() << std::endl;
 }
 
-int llm_channel_obj::subscriber_work_id(
+int NodeChannel::subscriber_work_id(
         const std::string& work_id,
         const std::function<void(const std::string&, const std::string&)>& call) {
     int id_num;
@@ -48,7 +50,6 @@ int llm_channel_obj::subscriber_work_id(
     std::smatch matches;
     if ((!work_id.empty()) && std::regex_match(work_id, matches, pattern)) {
         if (matches.size() == 3) {
-            // std::string part1 = matches[1].str();
             id_num = std::stoi(matches[2].str());
             std::string input_url_name = work_id + ".out_port";
             std::string input_url = unit_call("sys", "sql_select", input_url_name);
@@ -62,20 +63,19 @@ int llm_channel_obj::subscriber_work_id(
         subscriber_url = inference_url_;
     }
 
-    zmq_[id_num] =
-            std::make_shared<ZmqEndpoint>(subscriber_url, ZMQ_SUB,
-                                   std::bind(&llm_channel_obj::subscriber_event_call, this, call,
-                                             std::placeholders::_1, std::placeholders::_2));
+    zmq_[id_num] = std::make_shared<ZmqEndpoint>(
+            subscriber_url, ZMQ_SUB,
+            std::bind(&NodeChannel::subscriber_event_call, this, call,
+                      std::placeholders::_1, std::placeholders::_2));
     return 0;
 }
 
-void llm_channel_obj::stop_subscriber_work_id(const std::string& work_id) {
+void NodeChannel::stop_subscriber_work_id(const std::string& work_id) {
     int id_num;
     std::regex pattern(R"((\w+)\.(\d+))");
     std::smatch matches;
     if (std::regex_match(work_id, matches, pattern)) {
         if (matches.size() == 3) {
-            // std::string part1 = matches[1].str();
             id_num = std::stoi(matches[2].str());
         }
     } else {
@@ -84,12 +84,12 @@ void llm_channel_obj::stop_subscriber_work_id(const std::string& work_id) {
     if (zmq_.find(id_num) != zmq_.end()) zmq_.erase(id_num);
 }
 
-void llm_channel_obj::subscriber(const std::string& zmq_url, const ZmqEndpoint::msg_callback_fun& call) {
+void NodeChannel::subscriber(const std::string& zmq_url, const ZmqEndpoint::msg_callback_fun& call) {
     zmq_url_map_[zmq_url] = zmq_url_index_--;
     zmq_[zmq_url_map_[zmq_url]] = std::make_shared<ZmqEndpoint>(zmq_url, ZMQ_SUB, call);
 }
 
-void llm_channel_obj::stop_subscriber(const std::string& zmq_url) {
+void NodeChannel::stop_subscriber(const std::string& zmq_url) {
     if (zmq_url.empty()) {
         zmq_.clear();
         zmq_url_map_.clear();
@@ -99,9 +99,9 @@ void llm_channel_obj::stop_subscriber(const std::string& zmq_url) {
     }
 }
 
-int llm_channel_obj::send_raw_to_pub(const std::string& raw) { return zmq_[-1]->send_data(raw); }
+int NodeChannel::send_raw_to_pub(const std::string& raw) { return zmq_[-1]->send_data(raw); }
 
-int llm_channel_obj::send_raw_to_usr(const std::string& raw) {
+int NodeChannel::send_raw_to_usr(const std::string& raw) {
     if (zmq_[-2]) {
         return zmq_[-2]->send_data(raw);
     } else {
@@ -109,16 +109,15 @@ int llm_channel_obj::send_raw_to_usr(const std::string& raw) {
     }
 }
 
-void llm_channel_obj::set_push_url(const std::string& url) {
+void NodeChannel::set_push_url(const std::string& url) {
     if (output_url_ != url) {
         output_url_ = url;
         zmq_[-2].reset(new ZmqEndpoint(output_url_, ZMQ_PUSH));
     }
 }
 
-void llm_channel_obj::cear_push_url() { zmq_[-2].reset(); }
-
-int llm_channel_obj::send_raw_for_url(const std::string& zmq_url, const std::string& raw) {
+void NodeChannel::clear_push_url() { zmq_[-2].reset(); }
+int NodeChannel::send_raw_for_url(const std::string& zmq_url, const std::string& raw) {
     ZmqEndpoint _zmq(zmq_url, ZMQ_PUSH);
     return _zmq.send_data(raw);
 }

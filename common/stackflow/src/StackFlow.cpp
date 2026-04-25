@@ -4,7 +4,7 @@
 
 using namespace StackFlows;
 
-StackFlow::StackFlow::StackFlow(const std::string& unit_name)
+StackFlow::StackFlow(const std::string& unit_name)
         : unit_name_(unit_name), rpc_ctx_(std::make_unique<ZmqEndpoint>(unit_name)) {
     event_queue_.appendListener(LOCAL_EVENT::EVENT_NONE,
                                 std::bind(&StackFlow::_none_event, this, std::placeholders::_1));
@@ -39,13 +39,13 @@ StackFlow::~StackFlow() {
         event_queue_.enqueue(EVENT_NONE, nullptr);
         even_loop_thread_->join();
 
-        auto iteam = llm_task_channel_.begin();
-        if (iteam == llm_task_channel_.end()) {
+        auto iteam = task_channels_.begin();
+        if (iteam == task_channels_.end()) {
             break;
         }
         sys_release_unit(iteam->first, "");
         iteam->second.reset();
-        llm_task_channel_.erase(iteam->first);
+        task_channels_.erase(iteam->first);
     }
 }
 
@@ -58,9 +58,7 @@ void StackFlow::even_loop() {
     }
 }
 
-void StackFlow::_none_event(const std::shared_ptr<void>& arg) {
-    // std::shared_ptr<ZmqMessage> originalPtr = std::static_pointer_cast<ZmqMessage>(arg);
-}
+void StackFlow::_none_event(const std::shared_ptr<void>& arg) {}
 
 std::string StackFlow::_rpc_setup(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data) {
     event_queue_.enqueue(EVENT_SETUP, data);
@@ -186,8 +184,8 @@ int StackFlow::sys_register_unit(const std::string& unit_name) {
     work_id_number = std::stoi(str_port);
     ALOGI("work_id_number:%d, out_port:%s, inference_port:%s ", work_id_number, out_port.c_str(),
           inference_port.c_str());
-    llm_task_channel_[work_id_number] =
-            std::make_shared<llm_channel_obj>(out_port, inference_port, unit_name_);
+    task_channels_[work_id_number] =
+            std::make_shared<NodeChannel>(out_port, inference_port, unit_name_);
     return work_id_number;
 }
 
@@ -202,13 +200,13 @@ bool StackFlow::sys_release_unit(int work_id_num, const std::string& work_id) {
         _work_id_num = sample_get_work_id_num(work_id);
     }
     unit_call("sys", "release_unit", _work_id);
-    llm_task_channel_[_work_id_num].reset();
-    llm_task_channel_.erase(_work_id_num);
+    task_channels_[_work_id_num].reset();
+    task_channels_.erase(_work_id_num);
     ALOGI("release work_id %s success", _work_id.c_str());
     return false;
 }
 
-std::string StackFlow::sys_sql_select(const std::string& key) {}
+std::string StackFlow::sys_sql_select(const std::string& key) { return ""; }
 
 void StackFlow::sys_sql_set(const std::string& key, const std::string& val) {
     nlohmann::json out_body;
