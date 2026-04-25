@@ -6,28 +6,44 @@ ZmqMessage::ZmqMessage() { zmq_msg_init(&msg); }
 
 ZmqMessage::~ZmqMessage() { zmq_msg_close(&msg); }
 
+ZmqMessage::ZmqMessage(ZmqMessage&& other) noexcept {
+    zmq_msg_init(&msg);
+    zmq_msg_move(&msg, &other.msg);
+}
+
+ZmqMessage& ZmqMessage::operator=(ZmqMessage&& other) noexcept {
+    if (this != &other) {
+        zmq_msg_close(&msg);
+        zmq_msg_init(&msg);
+        zmq_msg_move(&msg, &other.msg);
+    }
+    return *this;
+}
+
 std::shared_ptr<std::string> ZmqMessage::get_string() {
-    auto len = zmq_msg_size(&msg);
-    return std::make_shared<std::string>((const char*)zmq_msg_data(&msg), len);
+    return std::make_shared<std::string>(static_cast<const char*>(zmq_msg_data(&msg)), zmq_msg_size(&msg));
 }
 
 std::string ZmqMessage::string() {
-    auto len = zmq_msg_size(&msg);
-    return std::string((const char*)zmq_msg_data(&msg), len);
+    return std::string(static_cast<const char*>(zmq_msg_data(&msg)), zmq_msg_size(&msg));
+}
+
+std::string_view ZmqMessage::view() const noexcept {
+    return {static_cast<const char*>(zmq_msg_data(const_cast<zmq_msg_t*>(&msg))), zmq_msg_size(const_cast<zmq_msg_t*>(&msg))};
 }
 
 void* ZmqMessage::data() { return zmq_msg_data(&msg); }
 
-size_t ZmqMessage::size() { return zmq_msg_size(&msg); }
+size_t ZmqMessage::size() const { return zmq_msg_size(const_cast<zmq_msg_t*>(&msg)); }
 
 zmq_msg_t* ZmqMessage::get() { return &msg; }
 
-std::string ZmqMessage::get_param(int index, const std::string& idata) {
+std::string ZmqMessage::get_param(int index, std::string_view idata) {
     const char* data = nullptr;
     int size = 0;
 
-    if (idata.length() > 0) {
-        data = idata.c_str();
+    if (!idata.empty()) {
+        data = idata.data();
         size = static_cast<int>(idata.length());
     } else {
         data = static_cast<const char*>(zmq_msg_data(&msg));
@@ -41,9 +57,13 @@ std::string ZmqMessage::get_param(int index, const std::string& idata) {
     }
 }
 
-std::string ZmqMessage::set_param(std::string param0, std::string param1) {
-    std::string data = " " + param0 + param1;
-    data[0] = static_cast<char>(param0.length());
+std::string ZmqMessage::set_param(std::string_view param0, std::string_view param1) {
+    std::string data;
+    data.reserve(1 + param0.length() + param1.length());
+    data.push_back(static_cast<char>(param0.length()));
+    data.append(param0);
+    data.append(param1);
     return data;
 }
+
 }  // namespace StackFlows
