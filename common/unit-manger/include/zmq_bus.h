@@ -19,7 +19,7 @@ protected:
     int json_str_flage_;
 
 public:
-    std::unique_ptr<pzmq> user_chennal_;
+    std::unique_ptr<ZmqEndpoint> user_chennal_;
     zmq_bus_com();
     void work(const std::string& zmq_url_format, int port);
     void stop();

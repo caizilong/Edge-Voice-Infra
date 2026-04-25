@@ -11,9 +11,12 @@ ZmqEndpoint::ZmqEndpoint(std::string_view server)
 
 ZmqEndpoint::ZmqEndpoint(std::string_view url, int mode, const msg_callback_fun& raw_call)
     : mode_(mode), timeout_(3000) {
-    if ((url[0] != 'i') && (url[1] != 'p')) {
+    // If caller passed a full URL (contains "://"), don't prepend the default rpc head
+    if (url.find("://") != std::string_view::npos) {
         rpc_url_head_.clear();
     }
+    // For non-rep (RPC function) sockets create immediately; RPC server sockets are
+    // created lazily when the first rpc action is registered.
     if (mode_ != ZMQ_RPC_FUN) {
         creat(url, raw_call);
     }
@@ -111,8 +114,14 @@ int ZmqEndpoint::call_rpc_action(std::string_view action, std::string_view data,
 
 int ZmqEndpoint::creat(std::string_view url, const msg_callback_fun& raw_call) {
     zmq_url_ = std::string{url};
-    do { zmq_ctx_ = zmq_ctx_new(); } while (zmq_ctx_ == nullptr);
-    do { zmq_socket_ = zmq_socket(zmq_ctx_, mode_ & 0x3f); } while (zmq_socket_ == nullptr);
+    zmq_ctx_ = zmq_ctx_new();
+    if (zmq_ctx_ == nullptr) return -1;
+    zmq_socket_ = zmq_socket(zmq_ctx_, mode_ & 0x3f);
+    if (zmq_socket_ == nullptr) {
+        zmq_ctx_destroy(zmq_ctx_);
+        zmq_ctx_ = nullptr;
+        return -1;
+    }
 
     switch (mode_) {
         case ZMQ_PUB:       return creat_pub(url);
@@ -167,6 +176,7 @@ int ZmqEndpoint::creat_rep(std::string_view url, const msg_callback_fun& raw_cal
 int ZmqEndpoint::creat_req(std::string_view url) {
     std::string final_url = std::string{url};
     if (!rpc_url_head_.empty()) {
+        if (final_url.size() <= static_cast<size_t>(rpc_url_head_length)) return -1;
         std::string socket_file = final_url.substr(rpc_url_head_length);
         if (access(socket_file.c_str(), F_OK) != 0) return -1;
     }

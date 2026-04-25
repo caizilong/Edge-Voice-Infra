@@ -41,7 +41,7 @@ public:
     eventpp::EventQueue<int, void(const std::shared_ptr<void>&)> event_queue_;
     std::unique_ptr<std::thread> even_loop_thread_;
 
-    std::unique_ptr<pzmq> rpc_ctx_;
+    std::unique_ptr<ZmqEndpoint> rpc_ctx_;
 
     std::unordered_map<int, std::shared_ptr<llm_channel_obj>> llm_task_channel_;
 
@@ -61,7 +61,7 @@ public:
         return llm_task_channel_.at(_work_id_num);
     }
 
-    std::string _rpc_setup(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& data);
+    std::string _rpc_setup(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data);
     void _setup(const std::shared_ptr<void>& arg) {
         std::shared_ptr<ZmqMessage> originalPtr = std::static_pointer_cast<ZmqMessage>(arg);
         // data->get_param(0), data->get_param(1)
@@ -76,7 +76,7 @@ public:
     virtual int setup(const std::string& work_id, const std::string& object,
                       const std::string& data);
 
-    std::string _rpc_exit(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& data);
+    std::string _rpc_exit(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data);
     void _exit(const std::shared_ptr<void>& arg) {
         std::shared_ptr<ZmqMessage> originalPtr = std::static_pointer_cast<ZmqMessage>(arg);
         std::string zmq_url = originalPtr->get_param(0);
@@ -89,7 +89,7 @@ public:
     virtual int exit(const std::string& work_id, const std::string& object,
                      const std::string& data);
 
-    std::string _rpc_pause(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& data);
+    std::string _rpc_pause(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data);
     void _pause(const std::shared_ptr<void>& arg) {
         std::shared_ptr<ZmqMessage> originalPtr = std::static_pointer_cast<ZmqMessage>(arg);
         std::string zmq_url = originalPtr->get_param(0);
@@ -102,7 +102,7 @@ public:
     virtual void pause(const std::string& work_id, const std::string& object,
                        const std::string& data);
 
-    std::string _rpc_taskinfo(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& data);
+    std::string _rpc_taskinfo(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data);
     void _taskinfo(const std::shared_ptr<void>& arg) {
         std::shared_ptr<ZmqMessage> originalPtr = std::static_pointer_cast<ZmqMessage>(arg);
         // data->get_param(0), data->get_param(1)
@@ -131,12 +131,12 @@ public:
             out_body["error"] = error_msg;
 
         if (zmq_url.empty()) {
-            pzmq _zmq(out_zmq_url_, ZMQ_PUSH);
+            ZmqEndpoint _zmq(out_zmq_url_, ZMQ_PUSH);
             std::string out = out_body.dump();
             out += "\n";
             return _zmq.send_data(out);
         } else {
-            pzmq _zmq(zmq_url, ZMQ_PUSH);
+            ZmqEndpoint _zmq(zmq_url, ZMQ_PUSH);
             std::string out = out_body.dump();
             out += "\n";
             return _zmq.send_data(out);
@@ -159,9 +159,9 @@ public:
         } else {
             return false;
         }
-        pzmq _call("sys");
+        ZmqEndpoint _call("sys");
         _call.call_rpc_action("release_unit", _work_id,
-                              [](pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& data) {});
+                              [](ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data) {});
         llm_task_channel_[_work_id_num].reset();
         llm_task_channel_.erase(_work_id_num);
         return false;

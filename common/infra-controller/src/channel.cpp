@@ -9,14 +9,14 @@ llm_channel_obj::llm_channel_obj(const std::string& _publisher_url,
         : unit_name_(unit_name), inference_url_(inference_url), publisher_url_(_publisher_url) {
     // publisher_url_ = _publisher_url;
     zmq_url_index_ = -1000;
-    zmq_[-1] = std::make_shared<pzmq>(publisher_url_, ZMQ_PUB);
+    zmq_[-1] = std::make_shared<ZmqEndpoint>(publisher_url_, ZMQ_PUB);
     zmq_[-2].reset();
 }
 
 llm_channel_obj::~llm_channel_obj() { std::cout << "llm_channel_obj 析构" << std::endl; }
 
 void llm_channel_obj::subscriber_event_call(
-        const std::function<void(const std::string&, const std::string&)>& call, pzmq* _pzmq,
+        const std::function<void(const std::string&, const std::string&)>& call, ZmqEndpoint* _ZmqEndpoint,
         const std::shared_ptr<ZmqMessage>& raw) {
     auto _raw = raw->string();
     const char* user_inference_flage_str = "\"action\"";
@@ -35,7 +35,7 @@ void llm_channel_obj::subscriber_event_call(
     }
     call(sample_json_str_get(_raw, "object"), sample_json_str_get(_raw, "data"));
 }
-void message_handler(pzmq* zmq_obj, const std::shared_ptr<ZmqMessage>& data) {
+void message_handler(ZmqEndpoint* zmq_obj, const std::shared_ptr<ZmqMessage>& data) {
     std::cout << "Received: " << data->string() << std::endl;
 }
 
@@ -63,7 +63,7 @@ int llm_channel_obj::subscriber_work_id(
     }
 
     zmq_[id_num] =
-            std::make_shared<pzmq>(subscriber_url, ZMQ_SUB,
+            std::make_shared<ZmqEndpoint>(subscriber_url, ZMQ_SUB,
                                    std::bind(&llm_channel_obj::subscriber_event_call, this, call,
                                              std::placeholders::_1, std::placeholders::_2));
     return 0;
@@ -84,9 +84,9 @@ void llm_channel_obj::stop_subscriber_work_id(const std::string& work_id) {
     if (zmq_.find(id_num) != zmq_.end()) zmq_.erase(id_num);
 }
 
-void llm_channel_obj::subscriber(const std::string& zmq_url, const pzmq::msg_callback_fun& call) {
+void llm_channel_obj::subscriber(const std::string& zmq_url, const ZmqEndpoint::msg_callback_fun& call) {
     zmq_url_map_[zmq_url] = zmq_url_index_--;
-    zmq_[zmq_url_map_[zmq_url]] = std::make_shared<pzmq>(zmq_url, ZMQ_SUB, call);
+    zmq_[zmq_url_map_[zmq_url]] = std::make_shared<ZmqEndpoint>(zmq_url, ZMQ_SUB, call);
 }
 
 void llm_channel_obj::stop_subscriber(const std::string& zmq_url) {
@@ -112,13 +112,13 @@ int llm_channel_obj::send_raw_to_usr(const std::string& raw) {
 void llm_channel_obj::set_push_url(const std::string& url) {
     if (output_url_ != url) {
         output_url_ = url;
-        zmq_[-2].reset(new pzmq(output_url_, ZMQ_PUSH));
+        zmq_[-2].reset(new ZmqEndpoint(output_url_, ZMQ_PUSH));
     }
 }
 
 void llm_channel_obj::cear_push_url() { zmq_[-2].reset(); }
 
 int llm_channel_obj::send_raw_for_url(const std::string& zmq_url, const std::string& raw) {
-    pzmq _zmq(zmq_url, ZMQ_PUSH);
+    ZmqEndpoint _zmq(zmq_url, ZMQ_PUSH);
     return _zmq.send_data(raw);
 }

@@ -25,7 +25,7 @@
 namespace StackFlows {
 class llm_channel_obj {
 private:
-    std::unordered_map<int, std::shared_ptr<pzmq>> zmq_;
+    std::unordered_map<int, std::shared_ptr<ZmqEndpoint>> zmq_;
     std::atomic<int> zmq_url_index_;
     std::unordered_map<std::string, int> zmq_url_map_;
 
@@ -48,12 +48,12 @@ public:
     inline void set_stream(bool flage) { enstream_ = flage; }
     inline bool get_stream() { return enstream_; }
     void subscriber_event_call(
-            const std::function<void(const std::string&, const std::string&)>& call, pzmq* _pzmq,
+            const std::function<void(const std::string&, const std::string&)>& call, ZmqEndpoint* _ZmqEndpoint,
             const std::shared_ptr<ZmqMessage>& raw);
     int subscriber_work_id(const std::string& work_id,
                            const std::function<void(const std::string&, const std::string&)>& call);
     void stop_subscriber_work_id(const std::string& work_id);
-    void subscriber(const std::string& zmq_url, const pzmq::msg_callback_fun& call);
+    void subscriber(const std::string& zmq_url, const ZmqEndpoint::msg_callback_fun& call);
     void stop_subscriber(const std::string& zmq_url);
     int send_raw_to_pub(const std::string& raw);
     int send_raw_to_usr(const std::string& raw);

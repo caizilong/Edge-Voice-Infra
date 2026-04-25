@@ -50,10 +50,15 @@ std::string ZmqMessage::get_param(int index, std::string_view idata) {
         size = static_cast<int>(zmq_msg_size(&msg));
     }
 
+    if (size <= 0) return std::string();
+    unsigned char len = static_cast<unsigned char>(data[0]);
     if ((index % 2) == 0) {
-        return std::string(data + 1, static_cast<size_t>(data[0]));
+        if (1 + static_cast<size_t>(len) > static_cast<size_t>(size)) return std::string();
+        return std::string(data + 1, static_cast<size_t>(len));
     } else {
-        return std::string(data + data[0] + 1, static_cast<size_t>(size - data[0] - 1));
+        size_t offset = 1 + static_cast<size_t>(len);
+        if (offset > static_cast<size_t>(size)) return std::string();
+        return std::string(data + offset, static_cast<size_t>(size) - offset);
     }
 }
 

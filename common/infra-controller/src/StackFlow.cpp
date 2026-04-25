@@ -5,7 +5,7 @@
 using namespace StackFlows;
 
 StackFlow::StackFlow::StackFlow(const std::string& unit_name)
-        : unit_name_(unit_name), rpc_ctx_(std::make_unique<pzmq>(unit_name)) {
+        : unit_name_(unit_name), rpc_ctx_(std::make_unique<ZmqEndpoint>(unit_name)) {
     event_queue_.appendListener(LOCAL_EVENT::EVENT_NONE,
                                 std::bind(&StackFlow::_none_event, this, std::placeholders::_1));
     event_queue_.appendListener(LOCAL_EVENT::EVENT_PAUSE,
@@ -62,7 +62,7 @@ void StackFlow::_none_event(const std::shared_ptr<void>& arg) {
     // std::shared_ptr<ZmqMessage> originalPtr = std::static_pointer_cast<ZmqMessage>(arg);
 }
 
-std::string StackFlow::_rpc_setup(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& data) {
+std::string StackFlow::_rpc_setup(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data) {
     event_queue_.enqueue(EVENT_SETUP, data);
     return std::string("None");
 }
@@ -91,7 +91,7 @@ int StackFlow::setup(const std::string& work_id, const std::string& object,
     return -1;
 }
 
-std::string StackFlow::_rpc_exit(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& data) {
+std::string StackFlow::_rpc_exit(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data) {
     event_queue_.enqueue(EVENT_EXIT, data);
     return std::string("None");
 }
@@ -121,7 +121,7 @@ int StackFlow::exit(const std::string& work_id, const std::string& object,
     return 0;
 }
 
-std::string StackFlow::_rpc_pause(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& data) {
+std::string StackFlow::_rpc_pause(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data) {
     event_queue_.enqueue(EVENT_PAUSE, data);
     return std::string("None");
 }
@@ -147,7 +147,7 @@ void StackFlow::pause(const std::string& work_id, const std::string& object,
     send("None", "None", error_body, work_id);
 }
 
-std::string StackFlow::_rpc_taskinfo(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& data) {
+std::string StackFlow::_rpc_taskinfo(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data) {
     event_queue_.enqueue(EVENT_TASKINFO, data);
     return std::string("None");
 }

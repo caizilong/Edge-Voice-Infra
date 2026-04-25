@@ -150,9 +150,9 @@ bool StackFlows::decode_stream(const std::string& in, std::string& out,
 std::string StackFlows::unit_call(const std::string& unit_name, const std::string& unit_action,
                                   const std::string& data) {
     std::string value;
-    pzmq _call(unit_name);
+    ZmqEndpoint _call(unit_name);
     _call.call_rpc_action(unit_action, data,
-                          [&value](pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& raw) {
+                          [&value](ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& raw) {
                               value = raw->string();
                           });
     return value;
@@ -162,10 +162,10 @@ void StackFlows::unit_call(
         const std::string& unit_name, const std::string& unit_action, const std::string& data,
         std::function<void(const std::shared_ptr<StackFlows::ZmqMessage>&)> callback) {
     std::string value;
-    StackFlows::pzmq _call(unit_name);
+    StackFlows::ZmqEndpoint _call(unit_name);
     _call.call_rpc_action(
             unit_action, data,
-            [callback](StackFlows::pzmq* _pzmq,
+            [callback](StackFlows::ZmqEndpoint* _ZmqEndpoint,
                        const std::shared_ptr<StackFlows::ZmqMessage>& raw) { callback(raw); });
 }
 

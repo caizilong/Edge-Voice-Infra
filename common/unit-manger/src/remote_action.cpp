@@ -25,8 +25,8 @@ int remote_call(int com_id, const std::string& json_str) {
     }
     char com_url[256];
     snprintf(com_url, 255, zmq_c_format.c_str(), com_id);
-    pzmq clent(work_unit);
+    ZmqEndpoint clent(work_unit);
     // 打包操作：客户端相关url数据
     return clent.call_rpc_action(action, ZmqMessage::set_param(com_url, json_str),
-                                 [](pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& val) {});
+                                 [](ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& val) {});
 }

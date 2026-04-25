@@ -19,7 +19,7 @@ using namespace StackFlows;
 std::atomic<int> work_id_number_counter;
 int port_list_start;
 std::vector<bool> port_list;
-std::unique_ptr<pzmq> sys_rpc_server_;
+std::unique_ptr<ZmqEndpoint> sys_rpc_server_;
 
 std::string sys_sql_select(const std::string& key) {
     std::string out;
@@ -105,23 +105,23 @@ int sys_release_unit(const std::string& unit) {
     return 0;
 }
 
-std::string rpc_allocate_unit(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& raw) {
+std::string rpc_allocate_unit(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& raw) {
     unit_data* unit_info = sys_allocate_unit(raw->string());
     return ZmqMessage::set_param(
             std::to_string(unit_info->port_),
             ZmqMessage::set_param(unit_info->output_url, unit_info->inference_url));
 }
 
-std::string rpc_release_unit(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& raw) {
+std::string rpc_release_unit(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& raw) {
     sys_release_unit(raw->string());
     return "Success";
 }
 
-std::string rpc_sql_select(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& raw) {
+std::string rpc_sql_select(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& raw) {
     return sys_sql_select(raw->string());
 }
 
-std::string rpc_sql_set(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& raw) {
+std::string rpc_sql_set(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& raw) {
     std::string key = sample_json_str_get(raw->string(), "key");
     std::string val = sample_json_str_get(raw->string(), "val");
     if (key.empty()) return "False";
@@ -129,7 +129,7 @@ std::string rpc_sql_set(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& raw) {
     return "Success";
 }
 
-std::string rpc_sql_unset(pzmq* _pzmq, const std::shared_ptr<ZmqMessage>& raw) {
+std::string rpc_sql_unset(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& raw) {
     sys_sql_unset(raw->string());
     return "Success";
 }
@@ -141,7 +141,7 @@ void remote_server_work() {
     SAFE_READING(port_list_end, int, "config_zmq_max_port");
     port_list.resize(port_list_end - port_list_start, 0);
 
-    sys_rpc_server_ = std::make_unique<pzmq>("sys");
+    sys_rpc_server_ = std::make_unique<ZmqEndpoint>("sys");
     sys_rpc_server_->register_rpc_action("sql_select", rpc_sql_select);
     sys_rpc_server_->register_rpc_action("register_unit", rpc_allocate_unit);
     sys_rpc_server_->register_rpc_action("release_unit", rpc_release_unit);
