@@ -51,7 +51,7 @@ std::string find_default_model() {
       "models/llm/Qwen3-1.7B.rkllm",
       "../models/llm/Qwen3-1.7B.rkllm",
       "../../models/llm/Qwen3-1.7B.rkllm",
-      "/home/pi/work/Edge-Voice-Infra/models/llm/Qwen3-1.7B.rkllm"};
+      "/home/pi/Edge-Voice-Infra/models/llm/Qwen3-1.7B.rkllm"};
   for (const auto &path : candidates) {
     if (file_exists(path)) {
       return path;
@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
 
   if (model_path.empty() || !file_exists(model_path)) {
     std::cerr << "[llm-service] model not found. Please pass --model, e.g.\n"
-                 "  --model /home/pi/work/Edge-Voice-Infra/models/llm/Qwen3-1.7B.rkllm"
+                 "  --model /home/pi/Edge-Voice-Infra/models/llm/Qwen3-1.7B.rkllm"
               << std::endl;
     return 1;
   }

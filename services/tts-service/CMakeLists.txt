@@ -80,10 +80,10 @@ target_compile_options(edge_tts_service PRIVATE
   -O3
   -fopenmp
   -include stdint.h
+  -Wno-stringop-overflow
 )
 
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(edge_tts_service OpenMP::OpenMP_CXX)
 endif()
-
