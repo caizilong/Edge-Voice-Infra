@@ -74,7 +74,9 @@ pnpm-debug.log*
 # Third-party source drops (vendor snapshots)
 # If you need to track a specific submodule/vendor, add whitelist rules below.
 # ------------------------------
-third-party/
+third-party/rknn-llm
+third-party/sherpa-onnx
+third-party/SummerTTS
 
 # ------------------------------
 # Model assets (large local files)

@@ -1,6 +1,6 @@
 #pragma once
 #include <pthread.h>
-#include "sample_log.h"
+#include "logger.h"
 
 #include <map>
 #include <string>

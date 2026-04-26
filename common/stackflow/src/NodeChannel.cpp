@@ -1,6 +1,6 @@
 #include "NodeChannel.h"
 #include <iostream>
-#include "sample_log.h"
+#include "logger.h"
 
 using namespace StackFlows;
 
