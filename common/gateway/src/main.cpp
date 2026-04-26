@@ -44,9 +44,9 @@ void all_stop_work()
 
 static void __sigint(int iSigNo)
 {
-    printf("llm_sys will be exit!\n");
+    printf("ai_gateway_sys will be exit!\n");
     main_exit_flage = 1;
-    ALOGD("llm_sys stop");
+    ALOGD("ai_gateway_sys stop");
     all_stop_work();
     pthread_spin_destroy(&key_sql_lock);
 }
@@ -59,16 +59,16 @@ int main(int argc, char *argv[])
 {
     signal(SIGTERM, __sigint);
     signal(SIGINT, __sigint);
-    mkdir("/tmp/llm", 0777);
+    mkdir("/tmp/ai_gateway", 0777);
     if (pthread_spin_init(&key_sql_lock, PTHREAD_PROCESS_PRIVATE) != 0)
     {
         ALOGE("key_sql_lock init false");
         exit(1);
     }
-    ALOGD("llm_sys start");
+    ALOGD("ai_gateway_sys start");
     get_run_config();
     all_work();
-    ALOGD("llm_sys work");
+    ALOGD("ai_gateway_sys work");
     while (main_exit_flage == 0)
     {
         sleep(1);

@@ -4,5 +4,4 @@
     "config_zmq_max_port": 5555,
     "config_zmq_s_format": "ipc:///tmp/llm/%i.sock",
     "config_zmq_c_format": "ipc:///tmp/llm/%i.sock"
-
 }
