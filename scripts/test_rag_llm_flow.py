@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import time
+import tempfile
 from pathlib import Path
 
 
@@ -17,11 +18,14 @@ def recv_json(sock_file):
     return json.loads(line.decode("utf-8"))
 
 
-def send_json(sock_file, payload):
+def send_json(sock_file, payload, label):
+    print(f"[phase1-test] -> {label}", flush=True)
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     sock_file.write(raw.encode("utf-8") + b"\n")
     sock_file.flush()
-    return recv_json(sock_file)
+    response = recv_json(sock_file)
+    print(f"[phase1-test] <- {label}: object={response.get('object')} error={response.get('error')}", flush=True)
+    return response
 
 
 def request_id(prefix):
@@ -42,29 +46,44 @@ def wait_for_tcp(host, port, timeout):
     raise RuntimeError(f"gateway did not listen on {host}:{port}: {last_error}")
 
 
-def start_process(path, cwd, env):
+def wait_for_path(path, timeout, label):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if Path(path).exists():
+            return
+        time.sleep(0.1)
+    raise RuntimeError(f"{label} did not create {path}")
+
+
+def start_process(name, path, cwd, env, log_dir):
     if not path.exists():
         raise FileNotFoundError(f"missing executable: {path}")
-    return subprocess.Popen(
+    log_path = log_dir / f"{name}.log"
+    log_file = open(log_path, "w", encoding="utf-8")
+    proc = subprocess.Popen(
         [str(path)],
         cwd=str(cwd),
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=log_file,
         stderr=subprocess.STDOUT,
         text=True,
         start_new_session=True,
     )
+    print(f"[phase1-test] started {name}: pid={proc.pid}, log={log_path}", flush=True)
+    return {"name": name, "proc": proc, "log_path": log_path, "log_file": log_file}
 
 
 def stop_processes(processes):
-    for proc in reversed(processes):
+    for item in reversed(processes):
+        proc = item["proc"]
         if proc.poll() is None:
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
     deadline = time.time() + 5
-    for proc in reversed(processes):
+    for item in reversed(processes):
+        proc = item["proc"]
         while proc.poll() is None and time.time() < deadline:
             time.sleep(0.1)
         if proc.poll() is None:
@@ -72,19 +91,22 @@ def stop_processes(processes):
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+        item["log_file"].close()
 
 
 def dump_process_logs(processes):
-    for name, proc in processes:
-        if proc.stdout is None:
-            continue
+    for item in processes:
+        name = item["name"]
+        log_path = item["log_path"]
         try:
-            output = proc.stdout.read()
+            output = log_path.read_text(encoding="utf-8", errors="replace")
         except Exception:
             output = ""
         if output:
             print(f"\n===== {name} output =====", file=sys.stderr)
             print(output[-4000:], file=sys.stderr)
+        else:
+            print(f"\n===== {name} output =====\n(no output, log={log_path})", file=sys.stderr)
 
 
 def main():
@@ -94,12 +116,15 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=10001)
     parser.add_argument("--query", default="发动机故障怎么办")
-    parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--no-start", action="store_true", help="Use already running services")
     parser.add_argument("--require-real-llm", action="store_true")
+    parser.add_argument("--log-dir", default="")
     args = parser.parse_args()
 
     build_dir = Path(args.build_dir)
+    log_dir = Path(args.log_dir) if args.log_dir else Path(tempfile.mkdtemp(prefix="edge_voice_phase1_"))
+    log_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env.setdefault("EDGE_VOICE_CONFIG", str(repo / "config" / "master_config.json"))
     env.setdefault("PYTHONPATH", str(repo / "services" / "rag-service" / "python"))
@@ -113,8 +138,16 @@ def main():
                 ("llm", build_dir / "services" / "llm-service" / "llm_ipc_service"),
             ]
             for name, path in executables:
-                named_processes.append((name, start_process(path, repo, env)))
+                named_processes.append(start_process(name, path, repo, env, log_dir))
+                time.sleep(0.2)
+                if named_processes[-1]["proc"].poll() is not None:
+                    dump_process_logs(named_processes)
+                    raise RuntimeError(f"{name} exited early with code {named_processes[-1]['proc'].returncode}")
+            print("[phase1-test] waiting for gateway TCP listener", flush=True)
             wait_for_tcp(args.host, args.port, args.timeout)
+            print("[phase1-test] waiting for RAG/LLM RPC sockets", flush=True)
+            wait_for_path("/tmp/rpc.rag", args.timeout, "rag_ipc_service")
+            wait_for_path("/tmp/rpc.llm", args.timeout, "llm_ipc_service")
 
         with socket.create_connection((args.host, args.port), timeout=args.timeout) as sock:
             sock.settimeout(args.timeout)
@@ -132,7 +165,7 @@ def main():
                     "top_k": 1,
                     "threshold": 0.5,
                 },
-            })
+            }, "rag setup")
             if rag_setup.get("error", {}).get("code") != 0:
                 raise AssertionError(f"RAG setup failed: {rag_setup}")
 
@@ -147,7 +180,7 @@ def main():
                     "max_context_len": 4096,
                     "require_real_backend": args.require_real_llm,
                 },
-            })
+            }, "llm setup")
             if llm_setup.get("error", {}).get("code") != 0:
                 raise AssertionError(f"LLM setup failed: {llm_setup}")
             if args.require_real_llm and llm_setup.get("data", {}).get("backend") != "rkllm":
@@ -162,7 +195,7 @@ def main():
                 "action": "inference",
                 "object": "rag.request",
                 "data": {"query": args.query},
-            })
+            }, "rag inference")
             if rag_response.get("error", {}).get("code") != 0:
                 raise AssertionError(f"RAG inference failed: {rag_response}")
             rag_data = rag_response.get("data", {})
@@ -179,7 +212,7 @@ def main():
                     "context": rag_data["context"],
                     "prompt": rag_data.get("prompt", args.query),
                 },
-            })
+            }, "llm inference")
             if llm_response.get("error", {}).get("code") != 0:
                 raise AssertionError(f"LLM inference failed: {llm_response}")
             llm_data = llm_response.get("data", {})
@@ -199,7 +232,7 @@ def main():
         raise
     finally:
         if not args.no_start:
-            stop_processes([proc for _, proc in named_processes])
+            stop_processes(named_processes)
 
 
 if __name__ == "__main__":
