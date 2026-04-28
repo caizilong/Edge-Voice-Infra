@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 #include "all.h"
@@ -70,6 +71,16 @@ std::string format_zmq_url(const std::string& zmq_format, int port) {
 
 bool parse_zmq_port(const std::string& url, int& port) {
     return std::sscanf(url.c_str(), zmq_s_format.c_str(), &port) == 1;
+}
+
+simdjson::error_code get_json_string(simdjson::ondemand::document& doc, const char* key,
+                                     std::string& out) {
+    std::string_view value;
+    auto error = doc[key].get_string().get(value);
+    if (!error) {
+        out.assign(value.data(), value.size());
+    }
+    return error;
 }
 
 }  // namespace
@@ -236,14 +247,14 @@ void unit_action_match(int com_id, const std::string& json_str) {
         return;
     }
     std::string request_id;
-    error = doc["request_id"].get_string(request_id);
+    error = get_json_string(doc, "request_id", request_id);
     if (error) {
         ALOGE("miss request_id, error:%s", simdjson::error_message(error));
         usr_print_error("0", "sys", "{\"code\":-2, \"message\":\"json format error\"}", com_id);
         return;
     }
     std::string work_id;
-    error = doc["work_id"].get_string(work_id);
+    error = get_json_string(doc, "work_id", work_id);
     if (error) {
         ALOGE("miss work_id, error:%s", simdjson::error_message(error));
         usr_print_error("0", "sys", "{\"code\":-2, \"message\":\"json format error\"}", com_id);
@@ -251,7 +262,7 @@ void unit_action_match(int com_id, const std::string& json_str) {
     }
     if (work_id.empty()) work_id = "sys";
     std::string action;
-    error = doc["action"].get_string().get(action);
+    error = get_json_string(doc, "action", action);
     if (error) {
         ALOGE("miss action, error:%s", simdjson::error_message(error));
         usr_print_error("0", "sys", "{\"code\":-2, \"message\":\"json format error\"}", com_id);

@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <simdjson.h>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "StackFlowUtil.h"
 #include "all.h"
@@ -22,6 +23,16 @@ std::string format_client_url(int com_id) {
     return std::string(buff.data());
 }
 
+simdjson::error_code get_json_string(simdjson::ondemand::document& doc, const char* key,
+                                     std::string& out) {
+    std::string_view value;
+    auto error = doc[key].get_string().get(value);
+    if (!error) {
+        out.assign(value.data(), value.size());
+    }
+    return error;
+}
+
 }  // namespace
 
 int remote_call(int com_id, const std::string& json_str) {
@@ -34,13 +45,13 @@ int remote_call(int com_id, const std::string& json_str) {
     }
 
     std::string work_id;
-    error = doc["work_id"].get_string(work_id);
+    error = get_json_string(doc, "work_id", work_id);
     if (error) {
         return -1;
     }
     std::string work_unit = work_id.substr(0, work_id.find("."));
     std::string action;
-    error = doc["action"].get_string(action);
+    error = get_json_string(doc, "action", action);
     if (error) {
         return -1;
     }
