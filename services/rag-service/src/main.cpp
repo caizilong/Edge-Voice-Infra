@@ -1,4 +1,8 @@
+#include <array>
 #include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -8,6 +12,7 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "StackFlow.h"
@@ -30,6 +35,28 @@ std::string json_text_field(const nlohmann::json& body,
     }
   }
   return {};
+}
+
+std::string first_existing_path(const std::vector<std::string>& candidates) {
+  for (const auto& path : candidates) {
+    if (std::filesystem::exists(path)) {
+      return path;
+    }
+  }
+  return candidates.empty() ? std::string() : candidates.front();
+}
+
+std::string shell_quote(const std::string& value) {
+  std::string out = "'";
+  for (char c : value) {
+    if (c == '\'') {
+      out += "'\\''";
+    } else {
+      out += c;
+    }
+  }
+  out += "'";
+  return out;
 }
 
 std::string extract_text_payload(const std::string& raw) {
@@ -92,6 +119,40 @@ std::string load_text_file(const std::string& path) {
   return out.str();
 }
 
+std::string run_command_capture_stdout(const std::string& command, int& exit_code) {
+  std::string output;
+  FILE* pipe = popen(command.c_str(), "r");
+  if (pipe == nullptr) {
+    exit_code = -1;
+    return output;
+  }
+
+  std::array<char, 4096> buffer{};
+  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+    output += buffer.data();
+  }
+  int status = pclose(pipe);
+  exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  return output;
+}
+
+bool write_query_file(const std::string& query, std::string& path) {
+  std::string pattern = "/tmp/edge_voice_rag_query_XXXXXX";
+  std::vector<char> writable(pattern.begin(), pattern.end());
+  writable.push_back('\0');
+  int fd = mkstemp(writable.data());
+  if (fd < 0) {
+    return false;
+  }
+  path = writable.data();
+  nlohmann::json body;
+  body["query"] = query;
+  std::string raw = body.dump();
+  ssize_t written = write(fd, raw.data(), raw.size());
+  close(fd);
+  return written == static_cast<ssize_t>(raw.size());
+}
+
 class RagService : public StackFlows::StackFlow {
  public:
   RagService() : StackFlow("rag") {}
@@ -110,8 +171,24 @@ class RagService : public StackFlows::StackFlow {
       if (config.contains("knowledge_file") && config["knowledge_file"].is_string()) {
         task.knowledge = load_text_file(config["knowledge_file"].get<std::string>());
       }
+      if (config.contains("model") && config["model"].is_string()) {
+        task.model_path = config["model"].get<std::string>();
+      }
+      if (config.contains("vector_db") && config["vector_db"].is_string()) {
+        task.vector_db_path = config["vector_db"].get<std::string>();
+      }
+      if (config.contains("script") && config["script"].is_string()) {
+        task.script_path = config["script"].get<std::string>();
+      }
+      if (config.contains("top_k") && config["top_k"].is_number_integer()) {
+        task.top_k = config["top_k"].get<int>();
+      }
+      if (config.contains("threshold") && config["threshold"].is_number()) {
+        task.threshold = config["threshold"].get<double>();
+      }
     } catch (...) {
     }
+    task.fill_defaults();
     tasks_[work_id_num] = task;
 
     channel->subscriber_work_id(
@@ -123,6 +200,9 @@ class RagService : public StackFlows::StackFlow {
     nlohmann::json response;
     response["service"] = "rag";
     response["status"] = "ready";
+    response["backend"] = "sentence-transformers-cli";
+    response["model"] = tasks_[work_id_num].model_path;
+    response["vector_db"] = tasks_[work_id_num].vector_db_path;
     send("rag.setup", response, NODE_NO_ERROR, work_id);
     return 0;
   }
@@ -156,7 +236,67 @@ class RagService : public StackFlows::StackFlow {
  private:
   struct RagTask {
     std::string knowledge;
+    std::string model_path;
+    std::string vector_db_path;
+    std::string script_path;
+    int top_k = 1;
+    double threshold = 0.5;
+
+    void fill_defaults() {
+      if (model_path.empty()) {
+        model_path = first_existing_path({
+            "models/rag/text2vec-base-chinese",
+            "../models/rag/text2vec-base-chinese",
+            "/home/pi/Edge-Voice-Infra/models/rag/text2vec-base-chinese",
+        });
+      }
+      if (vector_db_path.empty()) {
+        vector_db_path = first_existing_path({
+            "services/rag-service/python/vector_db",
+            "../services/rag-service/python/vector_db",
+            "/home/pi/Edge-Voice-Infra/services/rag-service/python/vector_db",
+        });
+      }
+      if (script_path.empty()) {
+        script_path = first_existing_path({
+            "services/rag-service/python/rag_query.py",
+            "../services/rag-service/python/rag_query.py",
+            "/home/pi/Edge-Voice-Infra/services/rag-service/python/rag_query.py",
+        });
+      }
+    }
   };
+
+  bool run_rag(const RagTask& task, const std::string& query, nlohmann::json& result,
+               std::string& error_message) {
+    std::string query_file;
+    if (!write_query_file(query, query_file)) {
+      error_message = "failed to create RAG query file";
+      return false;
+    }
+
+    std::string command = "python3 " + shell_quote(task.script_path) +
+                          " --input " + shell_quote(query_file) +
+                          " --model " + shell_quote(task.model_path) +
+                          " --vector-db " + shell_quote(task.vector_db_path) +
+                          " --top-k " + std::to_string(task.top_k) +
+                          " --threshold " + std::to_string(task.threshold);
+    int exit_code = 0;
+    std::string output = run_command_capture_stdout(command, exit_code);
+    unlink(query_file.c_str());
+
+    try {
+      result = nlohmann::json::parse(output);
+    } catch (...) {
+      error_message = "RAG backend returned invalid JSON";
+      return false;
+    }
+    if (exit_code != 0 || result.contains("error")) {
+      error_message = result.contains("error") ? result["error"].dump() : "RAG backend failed";
+      return false;
+    }
+    return true;
+  }
 
   void on_inference(int work_id_num,
                     std::weak_ptr<StackFlows::NodeChannel> weak_channel,
@@ -179,8 +319,21 @@ class RagService : public StackFlows::StackFlow {
     const std::string query_type = classify_query(query);
     std::string context = default_context(query_type);
     auto it = tasks_.find(work_id_num);
-    if (it != tasks_.end() && !it->second.knowledge.empty()) {
-      context = it->second.knowledge;
+    nlohmann::json rag_result;
+    if (it != tasks_.end()) {
+      if (!it->second.knowledge.empty()) {
+        context = it->second.knowledge;
+      } else {
+        std::string error_message;
+        if (!run_rag(it->second, query, rag_result, error_message)) {
+          nlohmann::json error;
+          error["code"] = -31;
+          error["message"] = error_message;
+          channel->send("rag.error", "None", error.dump());
+          return;
+        }
+        context = rag_result.value("context", context);
+      }
     }
 
     nlohmann::json response;
@@ -188,6 +341,9 @@ class RagService : public StackFlows::StackFlow {
     response["classification"] = query_type;
     response["context"] = context;
     response["prompt"] = "Question: " + query + "\nContext: " + context;
+    response["results"] = rag_result.is_object() ? rag_result.value("results", nlohmann::json::array())
+                                                 : nlohmann::json::array();
+    response["backend"] = rag_result.is_object() ? "sentence-transformers-cli" : "file-context";
     channel->send("rag.response", response, NODE_NO_ERROR);
   }
 

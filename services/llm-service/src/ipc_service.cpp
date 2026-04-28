@@ -1,5 +1,8 @@
 #include <csignal>
+#include <cstring>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -10,6 +13,10 @@
 
 #include "StackFlow.h"
 #include "json.hpp"
+
+#if EDGE_ENABLE_RKLLM
+#include "rkllm.h"
+#endif
 
 namespace {
 
@@ -50,6 +57,99 @@ std::string extract_prompt(const std::string& raw) {
   return raw;
 }
 
+std::string first_existing_path(const std::vector<std::string>& candidates) {
+  for (const auto& path : candidates) {
+    if (access(path.c_str(), F_OK) == 0) {
+      return path;
+    }
+  }
+  return candidates.empty() ? std::string() : candidates.front();
+}
+
+#if EDGE_ENABLE_RKLLM
+std::mutex g_rkllm_run_mutex;
+std::string* g_rkllm_output = nullptr;
+
+int rkllm_callback(RKLLMResult* result, void* userdata, LLMCallState state) {
+  (void)userdata;
+  if (state == RKLLM_RUN_NORMAL) {
+    if (result != nullptr && result->text != nullptr && g_rkllm_output != nullptr) {
+      g_rkllm_output->append(result->text);
+    }
+  }
+  return 0;
+}
+
+class RkllmRuntime {
+ public:
+  ~RkllmRuntime() {
+    if (handle_ != nullptr) {
+      rkllm_destroy(handle_);
+      handle_ = nullptr;
+    }
+  }
+
+  bool init(const std::string& model_path, int max_new_tokens, int max_context_len,
+            std::string& error_message) {
+    if (handle_ != nullptr) {
+      return true;
+    }
+    RKLLMParam param = rkllm_createDefaultParam();
+    param.model_path = const_cast<char*>(model_path.c_str());
+    param.top_k = 1;
+    param.top_p = 0.95f;
+    param.temperature = 0.8f;
+    param.repeat_penalty = 1.1f;
+    param.frequency_penalty = 0.0f;
+    param.presence_penalty = 0.0f;
+    param.max_new_tokens = max_new_tokens;
+    param.max_context_len = max_context_len;
+    param.skip_special_token = true;
+    param.extend_param.base_domain_id = 0;
+    param.extend_param.embed_flash = 1;
+
+    int ret = rkllm_init(&handle_, &param, rkllm_callback);
+    if (ret != 0) {
+      error_message = "rkllm_init failed, ret=" + std::to_string(ret);
+      handle_ = nullptr;
+      return false;
+    }
+    return true;
+  }
+
+  bool generate(const std::string& prompt, std::string& text, std::string& error_message) {
+    if (handle_ == nullptr) {
+      error_message = "RKLLM handle is not initialized";
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(g_rkllm_run_mutex);
+    text.clear();
+    g_rkllm_output = &text;
+
+    RKLLMInput input;
+    std::memset(&input, 0, sizeof(input));
+    RKLLMInferParam infer_param;
+    std::memset(&infer_param, 0, sizeof(infer_param));
+    infer_param.mode = RKLLM_INFER_GENERATE;
+    infer_param.keep_history = 0;
+    input.input_type = RKLLM_INPUT_PROMPT;
+    input.role = const_cast<char*>("user");
+    input.prompt_input = const_cast<char*>(prompt.c_str());
+
+    int ret = rkllm_run(handle_, &input, &infer_param, nullptr);
+    g_rkllm_output = nullptr;
+    if (ret != 0) {
+      error_message = "rkllm_run failed, ret=" + std::to_string(ret);
+      return false;
+    }
+    return true;
+  }
+
+ private:
+  LLMHandle handle_ = nullptr;
+};
+#endif
+
 class LlmIpcService : public StackFlows::StackFlow {
  public:
   LlmIpcService() : StackFlow("llm") {}
@@ -68,9 +168,42 @@ class LlmIpcService : public StackFlows::StackFlow {
       if (config.contains("model") && config["model"].is_string()) {
         task.model = config["model"].get<std::string>();
       }
+      if (config.contains("max_new_tokens") && config["max_new_tokens"].is_number_integer()) {
+        task.max_new_tokens = config["max_new_tokens"].get<int>();
+      }
+      if (config.contains("max_context_len") && config["max_context_len"].is_number_integer()) {
+        task.max_context_len = config["max_context_len"].get<int>();
+      }
+      if (config.contains("require_real_backend") && config["require_real_backend"].is_boolean()) {
+        task.require_real_backend = config["require_real_backend"].get<bool>();
+      }
     } catch (...) {
     }
-    tasks_[work_id_num] = task;
+    task.fill_defaults();
+
+#if EDGE_ENABLE_RKLLM
+    task.backend = "rkllm";
+    task.runtime = std::make_unique<RkllmRuntime>();
+    std::string error_message;
+    if (!task.runtime->init(task.model, task.max_new_tokens, task.max_context_len, error_message)) {
+      nlohmann::json error;
+      error["code"] = -51;
+      error["message"] = error_message;
+      send("llm.error", "None", error.dump(), work_id);
+      return -1;
+    }
+#else
+    task.backend = "mock-no-rkllm-runtime";
+    if (task.require_real_backend) {
+      nlohmann::json error;
+      error["code"] = -52;
+      error["message"] = "RKLLM runtime was not found at build time";
+      send("llm.error", "None", error.dump(), work_id);
+      return -1;
+    }
+#endif
+
+    tasks_[work_id_num] = std::move(task);
 
     channel->subscriber_work_id(
         "", [this, weak_channel = std::weak_ptr<StackFlows::NodeChannel>(channel),
@@ -81,7 +214,7 @@ class LlmIpcService : public StackFlows::StackFlow {
     nlohmann::json response;
     response["service"] = "llm";
     response["status"] = "ready";
-    response["backend"] = "phase1-mock";
+    response["backend"] = tasks_[work_id_num].backend;
     response["model"] = tasks_[work_id_num].model;
     send("llm.setup", response, NODE_NO_ERROR, work_id);
     return 0;
@@ -115,7 +248,24 @@ class LlmIpcService : public StackFlows::StackFlow {
 
  private:
   struct LlmTask {
-    std::string model = "phase1-mock";
+    std::string model;
+    std::string backend = "mock-no-rkllm-runtime";
+    int max_new_tokens = 512;
+    int max_context_len = 4096;
+    bool require_real_backend = false;
+#if EDGE_ENABLE_RKLLM
+    std::unique_ptr<RkllmRuntime> runtime;
+#endif
+
+    void fill_defaults() {
+      if (model.empty() || model == "phase1-mock") {
+        model = first_existing_path({
+            "models/llm/Qwen3-1.7B.rkllm",
+            "../models/llm/Qwen3-1.7B.rkllm",
+            "/home/pi/Edge-Voice-Infra/models/llm/Qwen3-1.7B.rkllm",
+        });
+      }
+    }
   };
 
   void on_inference(int work_id_num,
@@ -136,11 +286,35 @@ class LlmIpcService : public StackFlows::StackFlow {
     }
 
     const auto it = tasks_.find(work_id_num);
-    const std::string model = it == tasks_.end() ? "phase1-mock" : it->second.model;
+    if (it == tasks_.end()) {
+      nlohmann::json error;
+      error["code"] = -6;
+      error["message"] = "Unit does not exist";
+      channel->send("llm.error", "None", error.dump());
+      return;
+    }
+
+    std::string text;
+    std::string error_message;
+#if EDGE_ENABLE_RKLLM
+    if (it->second.runtime) {
+      if (!it->second.runtime->generate(prompt, text, error_message)) {
+        nlohmann::json error;
+        error["code"] = -53;
+        error["message"] = error_message;
+        channel->send("llm.error", "None", error.dump());
+        return;
+      }
+    } else
+#endif
+    {
+      text = "Mock LLM response: " + prompt;
+    }
 
     nlohmann::json response;
-    response["model"] = model;
-    response["text"] = "Phase1 LLM response: " + prompt;
+    response["model"] = it->second.model;
+    response["backend"] = it->second.backend;
+    response["text"] = text;
     response["finish"] = true;
     channel->send("llm.response", response, NODE_NO_ERROR);
   }
