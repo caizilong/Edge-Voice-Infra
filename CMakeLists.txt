@@ -15,4 +15,16 @@ else()
 	message(STATUS "Skipping build of common/stackflow (use -DBUILD_STACKFLOW=ON to enable)")
 endif()
 
+option(BUILD_GATEWAY "Build gateway service" ON)
+if(BUILD_GATEWAY)
+	add_subdirectory(common/gateway)
+endif()
+
+option(BUILD_PHASE1_SERVICES "Build phase1 IPC business services" ON)
+if(BUILD_PHASE1_SERVICES AND BUILD_STACKFLOW)
+	add_subdirectory(services/rag-service)
+	add_subdirectory(services/llm-service)
+	add_subdirectory(services/tts-service)
+endif()
+
 add_subdirectory(tests)

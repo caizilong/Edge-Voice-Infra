@@ -1,14 +1,25 @@
 cmake_minimum_required(VERSION 3.16)
 project(edge_voice_infra_tts_service)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(SUMMERTTS_ROOT "${CMAKE_SOURCE_DIR}/../../third-party/SummerTTS")
+get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 
-if(NOT EXISTS "${SUMMERTTS_ROOT}/include/SynthesizerTrn.h")
-  message(FATAL_ERROR "SummerTTS not found: ${SUMMERTTS_ROOT}")
-endif()
+add_executable(tts_ipc_service src/ipc_service.cpp)
+
+target_include_directories(tts_ipc_service PRIVATE
+  ${REPO_ROOT}/common/stackflow/include
+  ${REPO_ROOT}/common/zmq-comm/include
+  ${REPO_ROOT}/third-party
+  ${REPO_ROOT}/logging
+)
+
+target_link_libraries(tts_ipc_service PRIVATE stackflow)
+
+set(SUMMERTTS_ROOT "${REPO_ROOT}/third-party/SummerTTS")
+
+if(EXISTS "${SUMMERTTS_ROOT}/include/SynthesizerTrn.h")
 
 set(SUMMERTTS_GLOG_SRC
   "${SUMMERTTS_ROOT}/src/tn/glog/src/demangle.cc"
@@ -69,7 +80,7 @@ add_executable(edge_tts_service
 )
 
 target_include_directories(edge_tts_service PRIVATE
-  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${SUMMERTTS_ROOT}/include
   ${SUMMERTTS_ROOT}/src/header
   ${SUMMERTTS_ROOT}/src/tn/header
@@ -86,4 +97,8 @@ target_compile_options(edge_tts_service PRIVATE
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(edge_tts_service OpenMP::OpenMP_CXX)
+endif()
+
+else()
+  message(STATUS "SummerTTS not found; building tts_ipc_service only")
 endif()
