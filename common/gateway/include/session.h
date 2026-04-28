@@ -2,11 +2,11 @@
 
 #include <memory>
 
-#include "network/TcpServer.h"
-#include "network/EventLoop.h"
+#include "TcpServer.h"
+#include "EventLoop.h"
 
 #include "zmq_bus.h"
-#include "network/TcpConnection.h"
+#include "TcpConnection.h"
 
 class TcpSession : public zmq_bus_com
 {

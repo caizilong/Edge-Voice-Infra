@@ -10,8 +10,8 @@
 #include <mutex>
 #include <vector>
 
-#include "network/Callbacks.h"
-#include "network/util.h"
+#include "Callbacks.h"
+#include "util.h"
 namespace network {
 
 class Channel;

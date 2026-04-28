@@ -1,4 +1,4 @@
-#include "network/TcpClient.h"
+#include "TcpClient.h"
 
 #include <stdio.h>  // snprintf
 
@@ -8,9 +8,9 @@
 
 #include <glog/logging.h>
 
-#include "network/Connector.h"
-#include "network/EventLoop.h"
-#include "network/SocketsOps.h"
+#include "Connector.h"
+#include "EventLoop.h"
+#include "SocketsOps.h"
 
 using namespace network;
 

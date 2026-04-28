@@ -44,6 +44,7 @@ void ZmqEndpoint::set_timeout(int ms) { timeout_ = ms; }
 int ZmqEndpoint::get_timeout() const { return timeout_; }
 
 std::string ZmqEndpoint::_rpc_list_action(ZmqEndpoint* /*self*/, const std::shared_ptr<ZmqMessage>& /*_None*/) {
+    std::scoped_lock lock(zmq_fun_mtx_);
     std::string action_list = "{\"actions\":[";
     for (auto it = zmq_fun_.begin(); it != zmq_fun_.end(); ++it) {
         action_list += "\"";
@@ -98,11 +99,15 @@ int ZmqEndpoint::call_rpc_action(std::string_view action, std::string_view data,
             if (ret) throw ret;
         }
         
-        zmq_send(zmq_socket_, action.data(), action.length(), ZMQ_SNDMORE);
-        zmq_send(zmq_socket_, data.data(), data.length(), 0);
-        
-        zmq_msg_recv(msg_ptr->get(), zmq_socket_, 0);
-        
+        if (zmq_send(zmq_socket_, action.data(), action.length(), ZMQ_SNDMORE) < 0) {
+            throw -1;
+        }
+        if (zmq_send(zmq_socket_, data.data(), data.length(), 0) < 0) {
+            throw -1;
+        }
+        if (zmq_msg_recv(msg_ptr->get(), zmq_socket_, 0) < 0) {
+            throw -1;
+        }
         if (raw_call) raw_call(this, msg_ptr);
         
     } catch (int e) {
@@ -217,18 +222,23 @@ void ZmqEndpoint::zmq_event_loop(std::stop_token stoken, const msg_callback_fun&
 
         if (mode_ == ZMQ_RPC_FUN) {
             auto msg1_ptr = std::make_shared<ZmqMessage>();
-            zmq_msg_recv(msg1_ptr->get(), zmq_socket_, 0);
+            if (zmq_msg_recv(msg1_ptr->get(), zmq_socket_, 0) < 0) {
+                if (stoken.stop_requested()) break;
+                continue;
+            }
             std::string retval;
             try {
-                std::scoped_lock lock(zmq_fun_mtx_);
+                rpc_callback_fun callback;
                 std::string_view req_action = msg_ptr->view();
-                if (zmq_fun_.contains(req_action)) {
+                {
+                    std::scoped_lock lock(zmq_fun_mtx_);
                     auto it = zmq_fun_.find(req_action);
                     if (it != zmq_fun_.end()) {
-                        retval = it->second(this, msg1_ptr);
-                    } else {
-                        retval = "NotAction";
+                        callback = it->second;
                     }
+                }
+                if (callback) {
+                    retval = callback(this, msg1_ptr);
                 } else {
                     retval = "NotAction";
                 }

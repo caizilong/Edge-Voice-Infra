@@ -8,10 +8,10 @@
 #include <optional>
 #include <string_view>
 
-#include "network/Buffer.h"
-#include "network/Callbacks.h"
-#include "network/InetAddress.h"
-#include "network/Task.h"
+#include "buffer.h"
+#include "Callbacks.h"
+#include "InetAddress.h"
+#include "Task.h"
 
 // struct tcp_info is in <netinet/tcp.h>
 struct tcp_info;

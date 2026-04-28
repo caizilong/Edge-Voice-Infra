@@ -1,4 +1,4 @@
-#include "network/TcpConnection.h"
+#include "TcpConnection.h"
 
 #include <errno.h>
 
@@ -10,10 +10,10 @@
 
 #include <glog/logging.h>
 
-#include "network/Channel.h"
-#include "network/EventLoop.h"
-#include "network/Socket.h"
-#include "network/SocketsOps.h"
+#include "Channel.h"
+#include "EventLoop.h"
+#include "Socket.h"
+#include "SocketsOps.h"
 
 using namespace network;
 namespace network {

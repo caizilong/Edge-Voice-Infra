@@ -1,4 +1,4 @@
-#include "network/InetAddress.h"
+#include "InetAddress.h"
 
 #include <netdb.h>
 #include <netinet/in.h>

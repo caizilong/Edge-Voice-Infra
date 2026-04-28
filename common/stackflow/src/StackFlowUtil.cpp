@@ -2,6 +2,7 @@
 #include <glob.h>
 #include <fstream>
 #include <vector>
+#include "json.hpp"
 #include "zmq_endpoint.h"
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #include <arm_neon.h>
@@ -9,76 +10,19 @@
 
 std::string StackFlows::sample_json_str_get(const std::string& json_str,
                                             const std::string& json_key) {
-    std::string key_val;
-    std::string format_val;
-    std::string find_key = "\"" + json_key + "\"";
-    int subs_start = json_str.find(find_key);
-    if (subs_start == std::string::npos) {
-        return key_val;
-    }
-    int status = 0;
-    char last_c = '\0';
-    int obj_flage = 0;
-    for (auto c : json_str.substr(subs_start + find_key.length())) {
-        switch (status) {
-            case 0: {
-                switch (c) {
-                    case '"': {
-                        status = 100;
-                    } break;
-                    case '{': {
-                        key_val.push_back(c);
-                        obj_flage = 1;
-                        status = 10;
-                    } break;
-                    case ':':
-                        obj_flage = 1;
-                        break;
-                    case ',':
-                    case '}': {
-                        obj_flage = 0;
-                        status = -1;
-                    } break;
-                    case ' ':
-                        break;
-                    default: {
-                        if (obj_flage) {
-                            key_val.push_back(c);
-                        }
-                    } break;
-                }
-            } break;
-            case 10: {
-                key_val.push_back(c);
-                if (c == '{') {
-                    obj_flage++;
-                }
-                if (c == '}') {
-                    obj_flage--;
-                }
-                if (obj_flage == 0) {
-                    if (!key_val.empty()) {
-                        status = -1;
-                    }
-                }
-            } break;
-            case 100: {
-                if ((c == '"') && (last_c != '\\')) {
-                    obj_flage = 0;
-                    status = -1;
-                } else {
-                    key_val.push_back(c);
-                }
-            } break;
-            default:
-                break;
+    try {
+        auto body = nlohmann::json::parse(json_str);
+        auto it = body.find(json_key);
+        if (it == body.end() || it->is_null()) {
+            return {};
         }
-        last_c = c;
+        if (it->is_string()) {
+            return it->get<std::string>();
+        }
+        return it->dump();
+    } catch (...) {
+        return {};
     }
-    if (obj_flage != 0) {
-        key_val.clear();
-    }
-    return key_val;
 }
 
 int StackFlows::sample_get_work_id_num(const std::string& work_id) {
@@ -86,7 +30,11 @@ int StackFlows::sample_get_work_id_num(const std::string& work_id) {
     if ((a == std::string::npos) || (a == work_id.length() - 1)) {
         return WORK_ID_NONE;
     }
-    return std::stoi(work_id.substr(a + 1));
+    try {
+        return std::stoi(work_id.substr(a + 1));
+    } catch (...) {
+        return WORK_ID_NONE;
+    }
 }
 
 std::string StackFlows::sample_get_work_id_name(const std::string& work_id) {
@@ -128,12 +76,21 @@ void StackFlows::unicode_to_utf8(unsigned int codepoint, char* output, int* leng
 
 bool StackFlows::decode_text_stream(const std::string& in, std::string& out,
                                std::unordered_map<int, std::string>& stream_buff) {
-    int index = std::stoi(StackFlows::sample_json_str_get(in, "index"));
+    int index = 0;
+    try {
+        index = std::stoi(StackFlows::sample_json_str_get(in, "index"));
+    } catch (...) {
+        return false;
+    }
     std::string finish = StackFlows::sample_json_str_get(in, "finish");
     stream_buff[index] = StackFlows::sample_json_str_get(in, "delta");
     if (finish.find("f") == std::string::npos) {
         for (size_t i = 0; i < stream_buff.size(); i++) {
-            out += stream_buff.at(i);
+            auto it = stream_buff.find(static_cast<int>(i));
+            if (it == stream_buff.end()) {
+                return true;
+            }
+            out += it->second;
         }
         stream_buff.clear();
         return false;

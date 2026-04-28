@@ -6,7 +6,11 @@ using namespace StackFlows;
 
 NodeChannel::NodeChannel(const std::string& _publisher_url,
                          const std::string& inference_url, const std::string& unit_name)
-        : unit_name_(unit_name), inference_url_(inference_url), publisher_url_(_publisher_url) {
+        : unit_name_(unit_name),
+          enoutput_(false),
+          enstream_(false),
+          inference_url_(inference_url),
+          publisher_url_(_publisher_url) {
     zmq_url_index_ = -1000;
     zmq_[-1] = std::make_shared<ZmqEndpoint>(publisher_url_, ZMQ_PUB);
     zmq_[-2].reset();

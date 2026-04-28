@@ -1,11 +1,13 @@
 #pragma once 
 
 #include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/uio.h>
 
 namespace network {
 namespace sockets {
 
-int createNonblockingOrDrie(sa_family_t family);
+int createNonblockingOrDie(sa_family_t family);
 
 int connect(int sockfd, const struct sockaddr *addr);
 void bindOrDie(int sockfd, const struct sockaddr *addr);

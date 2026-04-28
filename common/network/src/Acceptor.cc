@@ -1,4 +1,4 @@
-#include "network/Acceptor.h"
+#include "Acceptor.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -7,9 +7,9 @@
 
 #include <glog/logging.h>
 
-#include "network/EventLoop.h"
-#include "network/InetAddress.h"
-#include "network/SocketsOps.h"
+#include "EventLoop.h"
+#include "InetAddress.h"
+#include "SocketsOps.h"
 // #include <sys/types.h>
 // #include <sys/stat.h>
 #include <unistd.h>

@@ -160,13 +160,16 @@ public:
         } else {
             return false;
         }
-        ZmqEndpoint _call("sys");
-        _call.call_rpc_action("release_unit", _work_id,
-                              [](ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data) {});
-        task_channels_[_work_id_num].reset();
-        task_channels_.erase(_work_id_num);
-        return false;
-    }
+	        ZmqEndpoint _call("sys");
+	        _call.call_rpc_action("release_unit", _work_id,
+	                              [](ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data) {});
+	        auto it = task_channels_.find(_work_id_num);
+	        if (it != task_channels_.end()) {
+	            it->second.reset();
+	            task_channels_.erase(it);
+	        }
+	        return false;
+	    }
     bool sys_release_unit(int work_id_num, const std::string& work_id);
     ~StackFlow();
 };

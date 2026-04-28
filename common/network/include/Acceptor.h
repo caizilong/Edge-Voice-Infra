@@ -2,8 +2,8 @@
 
 #include <functional>
 
-#include "network/Channel.h"
-#include "network/Socket.h"
+#include "Channel.h"
+#include "Socket.h"
 
 namespace network {
 

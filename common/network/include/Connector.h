@@ -4,7 +4,7 @@
 #include <functional>
 #include <memory>
 
-#include "network/InetAddress.h"
+#include "InetAddress.h"
 namespace network {
 
 class Channel;

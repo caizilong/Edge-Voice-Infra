@@ -4,8 +4,8 @@
 #include <deque>
 #include <mutex>
 
-#include "network/Task.h"
-#include "network/TcpConnection.h"
+#include "Task.h"
+#include "TcpConnection.h"
 namespace network {
 
 class Connector;

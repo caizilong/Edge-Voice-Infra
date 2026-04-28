@@ -1,8 +1,8 @@
-#include "network/EventLoopThread.h"
+#include "EventLoopThread.h"
 
 #include <pthread.h>
 
-#include "network/EventLoop.h"
+#include "EventLoop.h"
 
 namespace network
 {

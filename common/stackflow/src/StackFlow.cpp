@@ -34,18 +34,15 @@ StackFlow::StackFlow(const std::string& unit_name)
 }
 
 StackFlow::~StackFlow() {
-    while (1) {
-        exit_flage_.store(true);
-        event_queue_.enqueue(EVENT_NONE, nullptr);
+    exit_flage_.store(true);
+    event_queue_.enqueue(EVENT_NONE, nullptr);
+    if (even_loop_thread_ && even_loop_thread_->joinable()) {
         even_loop_thread_->join();
+    }
 
-        auto iteam = task_channels_.begin();
-        if (iteam == task_channels_.end()) {
-            break;
-        }
-        sys_release_unit(iteam->first, "");
-        iteam->second.reset();
-        task_channels_.erase(iteam->first);
+    while (!task_channels_.empty()) {
+        int work_id_num = task_channels_.begin()->first;
+        sys_release_unit(work_id_num, "");
     }
 }
 
@@ -68,6 +65,10 @@ std::string StackFlow::_rpc_setup(ZmqEndpoint* _ZmqEndpoint, const std::shared_p
 int StackFlow::setup(const std::string& zmq_url, const std::string& raw) {
     ALOGI("StackFlow::setup raw zmq_url:%s raw:%s", zmq_url.c_str(), raw.c_str());
     int workid_num = sys_register_unit(unit_name_);
+    if (workid_num == WORK_ID_NONE) {
+        ALOGE("StackFlow::setup register unit failed, unit:%s", unit_name_.c_str());
+        return -1;
+    }
     std::string work_id = unit_name_ + "." + std::to_string(workid_num);
     auto task_channel = get_channel(workid_num);
     task_channel->set_push_url(zmq_url);
@@ -181,7 +182,12 @@ int StackFlow::sys_register_unit(const std::string& unit_name) {
                   inference_port = pzmg_msg->get_param(1, str_port);
                   str_port = pzmg_msg->get_param(0);
               });
-    work_id_number = std::stoi(str_port);
+    try {
+        work_id_number = std::stoi(str_port);
+    } catch (...) {
+        ALOGE("register unit failed, invalid work id:%s", str_port.c_str());
+        return WORK_ID_NONE;
+    }
     ALOGI("work_id_number:%d, out_port:%s, inference_port:%s ", work_id_number, out_port.c_str(),
           inference_port.c_str());
     task_channels_[work_id_number] =
@@ -200,8 +206,11 @@ bool StackFlow::sys_release_unit(int work_id_num, const std::string& work_id) {
         _work_id_num = sample_get_work_id_num(work_id);
     }
     unit_call("sys", "release_unit", _work_id);
-    task_channels_[_work_id_num].reset();
-    task_channels_.erase(_work_id_num);
+    auto it = task_channels_.find(_work_id_num);
+    if (it != task_channels_.end()) {
+        it->second.reset();
+        task_channels_.erase(it);
+    }
     ALOGI("release work_id %s success", _work_id.c_str());
     return false;
 }

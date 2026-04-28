@@ -1,5 +1,6 @@
 #pragma once
 #include <pthread.h>
+#include <signal.h>
 #include "logger.h"
 
 #include <map>
@@ -49,4 +50,5 @@ void unit_action_match(int com_id, const std::string &json_str);
 
 extern std::string zmq_s_format;
 extern std::string zmq_c_format;
-extern int main_exit_flage;
+extern volatile sig_atomic_t main_exit_flage;
+extern int gateway_signal_fd;

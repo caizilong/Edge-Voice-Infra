@@ -52,7 +52,7 @@ const struct sockaddr_in6 *sockets::sockaddr_in6_cast(const struct sockaddr *add
     return static_cast<const struct sockaddr_in6 *>(static_cast<const void *>(addr));
 }
 
-int socket::createNonblockingOrDie(sa_family_t family) {
+int sockets::createNonblockingOrDie(sa_family_t family) {
 #if VALGRIND
     int sockfd = ::socket(family, SOCK_STREAM, IPPROTO_TCP);
     if (sockfd < 0) {
@@ -151,7 +151,7 @@ void sockets::shutdownWrite(int sockfd) {
     }
 }
 
-void socket::toIpPort(char *buf, size_t size, const struct sockaddr *addr) {
+void sockets::toIpPort(char *buf, size_t size, const struct sockaddr *addr) {
     if (addr->sa_family == AF_INET6) {
         buf[0] = '[';
         toIp(buf + 1, size - 1, addr);
@@ -182,7 +182,7 @@ void sockets::toIp(char *buf, size_t size, const struct sockaddr *addr) {
     }
 }
 
-void socket::fromIpPort(const char *ip, uint16_t port, struct sockaddr_in *addr) {
+void sockets::fromIpPort(const char *ip, uint16_t port, struct sockaddr_in *addr) {
     addr->sin_family = AF_INET;
     addr->sin_port = hostToNetwork16(port);
     if (::inet_pton(AF_INET, ip, &addr->sin_addr) <= 0) {
@@ -190,7 +190,7 @@ void socket::fromIpPort(const char *ip, uint16_t port, struct sockaddr_in *addr)
     }
 }
 
-void socket::fromIpPort(const char *ip, uint16_t port, struct sockaddr_in6 *addr) {
+void sockets::fromIpPort(const char *ip, uint16_t port, struct sockaddr_in6 *addr) {
     addr->sin6_family = AF_INET6;
     addr->sin6_port = hostToNetwork16(port);
     if (::inet_pton(AF_INET6, ip, &addr->sin6_addr) <= 0) {
@@ -198,7 +198,7 @@ void socket::fromIpPort(const char *ip, uint16_t port, struct sockaddr_in6 *addr
     }
 }
 
-void socket::getSocketError(int sockfd) {
+int sockets::getSocketError(int sockfd) {
     int optval;
     socklen_t optlen = static_cast<socklen_t>(sizeof(optval));
 

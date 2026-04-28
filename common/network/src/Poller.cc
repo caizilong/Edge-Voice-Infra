@@ -1,4 +1,4 @@
-#include "network/Poller.h"
+#include "Poller.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -10,7 +10,7 @@
 
 #include <glog/logging.h>
 
-#include "network/Channel.h"
+#include "Channel.h"
 
 using namespace network;
 

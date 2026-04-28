@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include <algorithm>
 #include <string>
@@ -95,26 +96,26 @@ public:
 
     void unwrite(size_t len) {
         assert(len <= readableBytes());
-        readerIndex_ -= len;
+        writerIndex_ -= len;
     }
 
     void appendInt64(int64_t x) {
-        int64_t net = hostToNetwork64(x);
+        int64_t net = sockets::hostToNetwork64(x);
         append(&net, sizeof(net));
     }
 
     void appendInt32(int32_t x) {
-        int32_t net = hostToNetwork32(x);
+        int32_t net = sockets::hostToNetwork32(x);
         append(&net, sizeof(net));
     }
 
     void appendInt16(int16_t x) {
-        int16_t net = hostToNetwork16(x);
+        int16_t net = sockets::hostToNetwork16(x);
         append(&net, sizeof(net));
     }
 
     void appendInt8(int8_t x) {
-        int8_t net = hostToNetwork8(x);
+        int8_t net = sockets::hostToNetwork8(x);
         append(&net, sizeof(net));
     }
 
@@ -195,7 +196,7 @@ public:
 
     size_t internalCapacity() const { return buffer_.capacity(); }
 
-    size_t readFd(int fd, int *savedErrno);
+    ssize_t readFd(int fd, int *savedErrno);
 
 private:
     char *begin() { return &*buffer_.begin(); }

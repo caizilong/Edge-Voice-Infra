@@ -2,6 +2,7 @@
 #include <StackFlowUtil.h>
 #include <simdjson.h>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -21,6 +22,58 @@ int port_list_start;
 std::vector<bool> port_list;
 std::unique_ptr<ZmqEndpoint> sys_rpc_server_;
 
+namespace {
+
+int allocate_zmq_port() {
+    for (size_t i = 0; i < port_list.size(); i++) {
+        if (!port_list[i]) {
+            port_list[i] = true;
+            return port_list_start + static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+void release_zmq_port(int port) {
+    const int index = port - port_list_start;
+    if (index >= 0 && static_cast<size_t>(index) < port_list.size()) {
+        port_list[static_cast<size_t>(index)] = false;
+    }
+}
+
+std::string format_zmq_url(const std::string& unit, const char* suffix, int port) {
+    std::string zmq_format = zmq_s_format;
+    if (zmq_s_format.find("sock") != std::string::npos) {
+        zmq_format += ".";
+        zmq_format += unit;
+        zmq_format += suffix;
+    }
+
+    const int size = std::snprintf(nullptr, 0, zmq_format.c_str(), port);
+    if (size <= 0) {
+        return {};
+    }
+    std::vector<char> buff(static_cast<size_t>(size) + 1, 0);
+    std::snprintf(buff.data(), buff.size(), zmq_format.c_str(), port);
+    return std::string(buff.data());
+}
+
+std::string format_zmq_url(const std::string& zmq_format, int port) {
+    const int size = std::snprintf(nullptr, 0, zmq_format.c_str(), port);
+    if (size <= 0) {
+        return {};
+    }
+    std::vector<char> buff(static_cast<size_t>(size) + 1, 0);
+    std::snprintf(buff.data(), buff.size(), zmq_format.c_str(), port);
+    return std::string(buff.data());
+}
+
+bool parse_zmq_port(const std::string& url, int& port) {
+    return std::sscanf(url.c_str(), zmq_s_format.c_str(), &port) == 1;
+}
+
+}  // namespace
+
 std::string sys_sql_select(const std::string& key) {
     std::string out;
     SAFE_READING(out, std::string, key);
@@ -32,58 +85,49 @@ void sys_sql_set(const std::string& key, const std::string& val) { SAFE_SETTING(
 void sys_sql_unset(const std::string& key) { SAFE_ERASE(key); }
 
 unit_data* sys_allocate_unit(const std::string& unit) {
-    unit_data* unit_p = new unit_data();
+    std::unique_ptr<unit_data> unit_p = std::make_unique<unit_data>();
     {
         unit_p->port_ = work_id_number_counter++;
         std::string ports = std::to_string(unit_p->port_);
         unit_p->work_id = unit + "." + ports;
     }
+    int output_port = -1;
+    int inference_port = -1;
     {
-        int port;
-        for (size_t i = 0; i < port_list.size(); i++) {
-            if (!port_list[i]) {
-                port = port_list_start + i;
-                port_list[i] = true;
-                break;
-            }
+        output_port = allocate_zmq_port();
+        if (output_port < 0) {
+            ALOGE("no available zmq output port for unit:%s", unit.c_str());
+            return nullptr;
         }
-        std::string ports = std::to_string(port);
-        std::string zmq_format = zmq_s_format;
-        if (zmq_s_format.find("sock") != std::string::npos) {
-            zmq_format += ".";
-            zmq_format += unit;
-            zmq_format += ".output_url";
+        std::string zmq_s_url = format_zmq_url(unit, ".output_url", output_port);
+        if (zmq_s_url.empty()) {
+            release_zmq_port(output_port);
+            ALOGE("format zmq output url failed for unit:%s", unit.c_str());
+            return nullptr;
         }
-        std::vector<char> buff(zmq_format.length() + ports.length(), 0);
-        sprintf((char*)buff.data(), zmq_format.c_str(), port);
-        std::string zmq_s_url = std::string((char*)buff.data());
         unit_p->output_url = zmq_s_url;
     }
 
     {
-        int port;
-        for (size_t i = 0; i < port_list.size(); i++) {
-            if (!port_list[i]) {
-                port = port_list_start + i;
-                port_list[i] = true;
-                break;
-            }
+        inference_port = allocate_zmq_port();
+        if (inference_port < 0) {
+            release_zmq_port(output_port);
+            ALOGE("no available zmq inference port for unit:%s", unit.c_str());
+            return nullptr;
         }
-        std::string ports = std::to_string(port);
-        std::string zmq_format = zmq_s_format;
-        if (zmq_s_format.find("sock") != std::string::npos) {
-            zmq_format += ".";
-            zmq_format += unit;
-            zmq_format += ".inference_url";
+        std::string zmq_s_url = format_zmq_url(unit, ".inference_url", inference_port);
+        if (zmq_s_url.empty()) {
+            release_zmq_port(output_port);
+            release_zmq_port(inference_port);
+            ALOGE("format zmq inference url failed for unit:%s", unit.c_str());
+            return nullptr;
         }
-        std::vector<char> buff(zmq_format.length() + ports.length(), 0);
-        sprintf((char*)buff.data(), zmq_format.c_str(), port);
-        std::string zmq_s_url = std::string((char*)buff.data());
         unit_p->init_zmq(zmq_s_url);
     }
-    SAFE_SETTING(unit_p->work_id, unit_p);
+    unit_data* raw_unit = unit_p.get();
+    SAFE_SETTING(unit_p->work_id, raw_unit);
     SAFE_SETTING(unit_p->work_id + ".out_port", unit_p->output_url);
-    return unit_p;
+    return unit_p.release();
 }
 
 int sys_release_unit(const std::string& unit) {
@@ -94,10 +138,12 @@ int sys_release_unit(const std::string& unit) {
     }
 
     int port;
-    sscanf(unit_p->output_url.c_str(), zmq_s_format.c_str(), &port);
-    port_list[port - port_list_start] = false;
-    sscanf(unit_p->inference_url.c_str(), zmq_s_format.c_str(), &port);
-    port_list[port - port_list_start] = false;
+    if (parse_zmq_port(unit_p->output_url, port)) {
+        release_zmq_port(port);
+    }
+    if (parse_zmq_port(unit_p->inference_url, port)) {
+        release_zmq_port(port);
+    }
 
     delete unit_p;
     SAFE_ERASE(unit);
@@ -107,6 +153,9 @@ int sys_release_unit(const std::string& unit) {
 
 std::string rpc_allocate_unit(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& raw) {
     unit_data* unit_info = sys_allocate_unit(raw->string());
+    if (unit_info == nullptr) {
+        return "False";
+    }
     return ZmqMessage::set_param(
             std::to_string(unit_info->port_),
             ZmqMessage::set_param(unit_info->output_url, unit_info->inference_url));
@@ -139,7 +188,12 @@ void remote_server_work() {
     SAFE_READING(work_id_number_counter, int, "config_work_id");
     SAFE_READING(port_list_start, int, "config_zmq_min_port");
     SAFE_READING(port_list_end, int, "config_zmq_max_port");
-    port_list.resize(port_list_end - port_list_start, 0);
+    if (port_list_end <= port_list_start) {
+        ALOGE("invalid zmq port range:%d-%d", port_list_start, port_list_end);
+        port_list.clear();
+    } else {
+        port_list.assign(static_cast<size_t>(port_list_end - port_list_start), false);
+    }
 
     sys_rpc_server_ = std::make_unique<ZmqEndpoint>("sys");
     sys_rpc_server_->register_rpc_action("sql_select", rpc_sql_select);
@@ -216,14 +270,18 @@ void unit_action_match(int com_id, const std::string& json_str) {
     }
     if (fragment.length()) work_id_fragment.push_back(fragment);
     if (action == "inference") {
-        char zmq_push_url[128];
-        int post = sprintf(zmq_push_url, zmq_c_format.c_str(), com_id);
+        std::string zmq_push_url = format_zmq_url(zmq_c_format, com_id);
+        if (zmq_push_url.empty()) {
+            usr_print_error(request_id, work_id,
+                            "{\"code\":-4, \"message\":\"zmq url format false\"}", com_id);
+            return;
+        }
         std::string inference_raw_data;
-        inference_raw_data.resize(post + json_str.length() + 13);
-        post = sprintf(inference_raw_data.data(), "{\"zmq_com\":\"");
-        post += sprintf(inference_raw_data.data() + post, "%s", zmq_push_url);
-        post += sprintf(inference_raw_data.data() + post, "\",");
-        memcpy(inference_raw_data.data() + post, json_str.data() + 1, json_str.length() - 1);
+        inference_raw_data.reserve(zmq_push_url.size() + json_str.size() + 13);
+        inference_raw_data += "{\"zmq_com\":\"";
+        inference_raw_data += zmq_push_url;
+        inference_raw_data += "\",";
+        inference_raw_data.append(json_str.data() + 1, json_str.length() - 1);
         int ret = zmq_bus_publisher_push(work_id, inference_raw_data);
         if (ret) {
             usr_print_error(request_id, work_id,

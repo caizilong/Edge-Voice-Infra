@@ -1,11 +1,11 @@
-#include "network/EventLoopThreadPool.h"
+#include "EventLoopThreadPool.h"
 
 #include <stdio.h>
 
 #include <glog/logging.h>
 
-#include "network/EventLoop.h"
-#include "network/EventLoopThread.h"
+#include "EventLoop.h"
+#include "EventLoopThread.h"
 
 namespace network {
 EventLoopThreadPool::EventLoopThreadPool(EventLoop *baseLoop,
