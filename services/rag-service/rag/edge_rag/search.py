@@ -40,6 +40,10 @@ class HybridRagIndex:
     def close(self):
         self.con.close()
 
+    def warmup(self):
+        self._load_vectors()
+        encode_texts(self.model_path, ["warmup"])
+
     def _load_vectors(self):
         if self._embeddings is not None:
             return

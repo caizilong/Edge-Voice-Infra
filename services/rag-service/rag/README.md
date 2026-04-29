@@ -30,3 +30,16 @@ python3 services/rag-service/rag/query.py \
 rm -f "$tmp"
 ```
 
+## Worker mode
+
+`rag_ipc_service` starts this mode during `rag.setup` and keeps the model resident:
+
+```bash
+python3 services/rag-service/rag/query.py \
+  --worker \
+  --db services/rag-service/data/knowledge/vehicle_knowledge.sqlite \
+  --model models/rag/text2vec-base-chinese
+```
+
+Each stdin line must be a JSON object such as `{"query":"发动机故障怎么办"}`.
+Each stdout line is one compact JSON response.

@@ -1,11 +1,14 @@
 #include <array>
+#include <cerrno>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <list>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -15,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include "StackFlow.h"
@@ -46,19 +50,6 @@ std::string first_existing_path(const std::vector<std::string>& candidates) {
     }
   }
   return candidates.empty() ? std::string() : candidates.front();
-}
-
-std::string shell_quote(const std::string& value) {
-  std::string out = "'";
-  for (char c : value) {
-    if (c == '\'') {
-      out += "'\\''";
-    } else {
-      out += c;
-    }
-  }
-  out += "'";
-  return out;
 }
 
 std::string extract_text_payload(const std::string& raw) {
@@ -121,39 +112,215 @@ std::string load_text_file(const std::string& path) {
   return out.str();
 }
 
-std::string run_command_capture_stdout(const std::string& command, int& exit_code) {
-  std::string output;
-  FILE* pipe = popen(command.c_str(), "r");
-  if (pipe == nullptr) {
-    exit_code = -1;
-    return output;
+bool write_all(int fd, const std::string& data) {
+  const char* ptr = data.data();
+  size_t remaining = data.size();
+  while (remaining > 0) {
+    ssize_t written = write(fd, ptr, remaining);
+    if (written < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return false;
+    }
+    if (written == 0) {
+      return false;
+    }
+    ptr += written;
+    remaining -= static_cast<size_t>(written);
   }
-
-  std::array<char, 4096> buffer{};
-  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
-    output += buffer.data();
-  }
-  int status = pclose(pipe);
-  exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-  return output;
+  return true;
 }
 
-bool write_query_file(const std::string& query, std::string& path) {
-  std::string pattern = "/tmp/edge_voice_rag_query_XXXXXX";
-  std::vector<char> writable(pattern.begin(), pattern.end());
-  writable.push_back('\0');
-  int fd = mkstemp(writable.data());
-  if (fd < 0) {
-    return false;
+class RagWorker {
+ public:
+  RagWorker(std::string script_path, std::string model_path, std::string knowledge_db_path,
+            int top_k, int candidate_k, double threshold, int context_chars)
+      : script_path_(std::move(script_path)),
+        model_path_(std::move(model_path)),
+        knowledge_db_path_(std::move(knowledge_db_path)),
+        top_k_(top_k),
+        candidate_k_(candidate_k),
+        threshold_(threshold),
+        context_chars_(context_chars) {}
+
+  RagWorker(const RagWorker&) = delete;
+  RagWorker& operator=(const RagWorker&) = delete;
+
+  ~RagWorker() {
+    stop();
   }
-  path = writable.data();
-  nlohmann::json body;
-  body["query"] = query;
-  std::string raw = body.dump();
-  ssize_t written = write(fd, raw.data(), raw.size());
-  close(fd);
-  return written == static_cast<ssize_t>(raw.size());
-}
+
+  bool start(std::string& error_message) {
+    return ensure_started(error_message);
+  }
+
+  bool request(const std::string& query, nlohmann::json& result, std::string& error_message) {
+    if (!ensure_started(error_message)) {
+      return false;
+    }
+    if (!send_request(query, result, error_message)) {
+      stop();
+      if (!ensure_started(error_message)) {
+        return false;
+      }
+      return send_request(query, result, error_message);
+    }
+    return true;
+  }
+
+ private:
+  bool ensure_started(std::string& error_message) {
+    if (pid_ > 0) {
+      int status = 0;
+      pid_t ret = waitpid(pid_, &status, WNOHANG);
+      if (ret == 0) {
+        return true;
+      }
+      cleanup_handles();
+      pid_ = -1;
+    }
+
+    int to_child[2] = {-1, -1};
+    int from_child[2] = {-1, -1};
+    if (pipe(to_child) != 0 || pipe(from_child) != 0) {
+      error_message = std::string("failed to create RAG worker pipes: ") + std::strerror(errno);
+      if (to_child[0] >= 0) close(to_child[0]);
+      if (to_child[1] >= 0) close(to_child[1]);
+      if (from_child[0] >= 0) close(from_child[0]);
+      if (from_child[1] >= 0) close(from_child[1]);
+      return false;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+      error_message = std::string("failed to fork RAG worker: ") + std::strerror(errno);
+      close(to_child[0]);
+      close(to_child[1]);
+      close(from_child[0]);
+      close(from_child[1]);
+      return false;
+    }
+
+    if (child == 0) {
+      dup2(to_child[0], STDIN_FILENO);
+      dup2(from_child[1], STDOUT_FILENO);
+      close(to_child[0]);
+      close(to_child[1]);
+      close(from_child[0]);
+      close(from_child[1]);
+
+      const std::string top_k = std::to_string(top_k_);
+      const std::string candidate_k = std::to_string(candidate_k_);
+      const std::string threshold = std::to_string(threshold_);
+      const std::string context_chars = std::to_string(context_chars_);
+      execlp("python3", "python3",
+             script_path_.c_str(),
+             "--worker",
+             "--model", model_path_.c_str(),
+             "--db", knowledge_db_path_.c_str(),
+             "--top-k", top_k.c_str(),
+             "--candidate-k", candidate_k.c_str(),
+             "--threshold", threshold.c_str(),
+             "--context-chars", context_chars.c_str(),
+             static_cast<char*>(nullptr));
+      _exit(127);
+    }
+
+    close(to_child[0]);
+    close(from_child[1]);
+    write_fd_ = to_child[1];
+    read_file_ = fdopen(from_child[0], "r");
+    if (read_file_ == nullptr) {
+      error_message = std::string("failed to open RAG worker stdout: ") + std::strerror(errno);
+      close(write_fd_);
+      write_fd_ = -1;
+      close(from_child[0]);
+      kill(child, SIGTERM);
+      waitpid(child, nullptr, 0);
+      return false;
+    }
+    pid_ = child;
+    return true;
+  }
+
+  bool send_request(const std::string& query, nlohmann::json& result, std::string& error_message) {
+    nlohmann::json payload;
+    payload["query"] = query;
+    std::string raw = payload.dump();
+    raw.push_back('\n');
+    if (!write_all(write_fd_, raw)) {
+      error_message = std::string("failed to write RAG worker request: ") + std::strerror(errno);
+      return false;
+    }
+
+    std::string line;
+    std::array<char, 4096> buffer{};
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), read_file_) != nullptr) {
+      line += buffer.data();
+      if (!line.empty() && line.back() == '\n') {
+        break;
+      }
+    }
+    if (line.empty()) {
+      error_message = "RAG worker closed stdout";
+      return false;
+    }
+
+    try {
+      result = nlohmann::json::parse(line);
+    } catch (const std::exception& exc) {
+      error_message = std::string("RAG worker returned invalid JSON: ") + exc.what();
+      return false;
+    }
+    return true;
+  }
+
+  void cleanup_handles() {
+    if (read_file_ != nullptr) {
+      fclose(read_file_);
+      read_file_ = nullptr;
+    }
+    if (write_fd_ >= 0) {
+      close(write_fd_);
+      write_fd_ = -1;
+    }
+  }
+
+  void stop() {
+    cleanup_handles();
+    if (pid_ > 0) {
+      int status = 0;
+      pid_t ret = waitpid(pid_, &status, WNOHANG);
+      if (ret == 0) {
+        kill(pid_, SIGTERM);
+        for (int i = 0; i < 20; ++i) {
+          ret = waitpid(pid_, &status, WNOHANG);
+          if (ret == pid_) {
+            break;
+          }
+          usleep(50000);
+        }
+        if (ret == 0) {
+          kill(pid_, SIGKILL);
+          waitpid(pid_, &status, 0);
+        }
+      }
+      pid_ = -1;
+    }
+  }
+
+  std::string script_path_;
+  std::string model_path_;
+  std::string knowledge_db_path_;
+  int top_k_;
+  int candidate_k_;
+  double threshold_;
+  int context_chars_;
+  pid_t pid_ = -1;
+  int write_fd_ = -1;
+  FILE* read_file_ = nullptr;
+};
 
 class RagService : public StackFlows::StackFlow {
  public:
@@ -204,6 +371,16 @@ class RagService : public StackFlows::StackFlow {
     }
     task.fill_defaults();
     tasks_[work_id_num] = std::move(task);
+    if (tasks_[work_id_num].knowledge.empty()) {
+      std::string error_message;
+      if (!tasks_[work_id_num].get_worker().start(error_message)) {
+        nlohmann::json error;
+        error["code"] = -31;
+        error["message"] = error_message;
+        send("rag.error", "None", error.dump(), work_id);
+        return -1;
+      }
+    }
 
     channel->subscriber_work_id(
         "", [this, weak_channel = std::weak_ptr<StackFlows::NodeChannel>(channel),
@@ -262,6 +439,7 @@ class RagService : public StackFlows::StackFlow {
     std::unordered_map<std::string,
                        std::pair<nlohmann::json, std::list<std::string>::iterator>>
         response_cache;
+    std::unique_ptr<RagWorker> worker;
 
     void fill_defaults() {
       if (model_path.empty()) {
@@ -324,6 +502,14 @@ class RagService : public StackFlows::StackFlow {
         cache_order.pop_back();
       }
     }
+
+    RagWorker& get_worker() {
+      if (!worker) {
+        worker = std::make_unique<RagWorker>(script_path, model_path, knowledge_db_path,
+                                             top_k, candidate_k, threshold, context_chars);
+      }
+      return *worker;
+    }
   };
 
   bool run_rag(RagTask& task, const std::string& query, nlohmann::json& result,
@@ -333,31 +519,10 @@ class RagService : public StackFlows::StackFlow {
       return true;
     }
 
-    std::string query_file;
-    if (!write_query_file(query, query_file)) {
-      error_message = "failed to create RAG query file";
+    if (!task.get_worker().request(query, result, error_message)) {
       return false;
     }
-
-    std::string command = "python3 " + shell_quote(task.script_path) +
-                          " --input " + shell_quote(query_file) +
-                          " --model " + shell_quote(task.model_path) +
-                          " --db " + shell_quote(task.knowledge_db_path) +
-                          " --top-k " + std::to_string(task.top_k) +
-                          " --candidate-k " + std::to_string(task.candidate_k) +
-                          " --threshold " + std::to_string(task.threshold) +
-                          " --context-chars " + std::to_string(task.context_chars);
-    int exit_code = 0;
-    std::string output = run_command_capture_stdout(command, exit_code);
-    unlink(query_file.c_str());
-
-    try {
-      result = nlohmann::json::parse(output);
-    } catch (...) {
-      error_message = "RAG backend returned invalid JSON";
-      return false;
-    }
-    if (exit_code != 0 || result.contains("error")) {
+    if (result.contains("error")) {
       error_message = result.contains("error") ? result["error"].dump() : "RAG backend failed";
       return false;
     }
@@ -429,6 +594,7 @@ class RagService : public StackFlows::StackFlow {
 int main() {
   std::signal(SIGINT, handle_signal);
   std::signal(SIGTERM, handle_signal);
+  std::signal(SIGPIPE, SIG_IGN);
   mkdir("/tmp/llm", 0777);
 
   RagService service;
