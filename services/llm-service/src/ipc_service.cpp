@@ -1,5 +1,7 @@
 #include <csignal>
+#include <chrono>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -68,13 +70,43 @@ std::string first_existing_path(const std::vector<std::string>& candidates) {
 
 #if EDGE_ENABLE_RKLLM
 std::mutex g_rkllm_run_mutex;
-std::string* g_rkllm_output = nullptr;
+
+using Clock = std::chrono::steady_clock;
+
+struct RkllmRunState {
+  std::string* output = nullptr;
+  std::function<void(const std::string&, size_t, double)> on_delta;
+  Clock::time_point start;
+  bool saw_first_token = false;
+  double first_token_ms = -1.0;
+  size_t delta_count = 0;
+};
+
+RkllmRunState* g_rkllm_state = nullptr;
+
+double elapsed_ms(Clock::time_point start) {
+  return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
 
 int rkllm_callback(RKLLMResult* result, void* userdata, LLMCallState state) {
   (void)userdata;
   if (state == RKLLM_RUN_NORMAL) {
-    if (result != nullptr && result->text != nullptr && g_rkllm_output != nullptr) {
-      g_rkllm_output->append(result->text);
+    if (result != nullptr && result->text != nullptr && g_rkllm_state != nullptr &&
+        g_rkllm_state->output != nullptr) {
+      std::string delta = result->text;
+      if (delta.empty()) {
+        return 0;
+      }
+      g_rkllm_state->output->append(delta);
+      ++g_rkllm_state->delta_count;
+      if (!g_rkllm_state->saw_first_token) {
+        g_rkllm_state->saw_first_token = true;
+        g_rkllm_state->first_token_ms = elapsed_ms(g_rkllm_state->start);
+      }
+      if (g_rkllm_state->on_delta) {
+        g_rkllm_state->on_delta(delta, g_rkllm_state->delta_count,
+                                g_rkllm_state->first_token_ms);
+      }
     }
   }
   return 0;
@@ -117,14 +149,20 @@ class RkllmRuntime {
     return true;
   }
 
-  bool generate(const std::string& prompt, std::string& text, std::string& error_message) {
+  bool generate(const std::string& prompt, std::string& text, nlohmann::json& metrics,
+                const std::function<void(const std::string&, size_t, double)>& on_delta,
+                std::string& error_message) {
     if (handle_ == nullptr) {
       error_message = "RKLLM handle is not initialized";
       return false;
     }
     std::lock_guard<std::mutex> lock(g_rkllm_run_mutex);
     text.clear();
-    g_rkllm_output = &text;
+    RkllmRunState state;
+    state.output = &text;
+    state.on_delta = on_delta;
+    state.start = Clock::now();
+    g_rkllm_state = &state;
 
     RKLLMInput input;
     std::memset(&input, 0, sizeof(input));
@@ -137,11 +175,16 @@ class RkllmRuntime {
     input.prompt_input = const_cast<char*>(prompt.c_str());
 
     int ret = rkllm_run(handle_, &input, &infer_param, nullptr);
-    g_rkllm_output = nullptr;
+    const double total_ms = elapsed_ms(state.start);
+    g_rkllm_state = nullptr;
     if (ret != 0) {
       error_message = "rkllm_run failed, ret=" + std::to_string(ret);
       return false;
     }
+    metrics["first_token_ms"] = state.first_token_ms;
+    metrics["total_ms"] = total_ms;
+    metrics["delta_count"] = state.delta_count;
+    metrics["stream"] = true;
     return true;
   }
 
@@ -160,7 +203,7 @@ class LlmIpcService : public StackFlows::StackFlow {
     int work_id_num = StackFlows::sample_get_work_id_num(work_id);
     auto channel = get_channel(work_id);
     channel->set_output(true);
-    channel->set_stream(false);
+    channel->set_stream(true);
 
     LlmTask task;
     try {
@@ -296,9 +339,18 @@ class LlmIpcService : public StackFlows::StackFlow {
 
     std::string text;
     std::string error_message;
+    nlohmann::json metrics;
 #if EDGE_ENABLE_RKLLM
     if (it->second.runtime) {
-      if (!it->second.runtime->generate(prompt, text, error_message)) {
+      auto delta_sender = [channel](const std::string& delta, size_t index, double first_token_ms) {
+        nlohmann::json event;
+        event["delta"] = delta;
+        event["index"] = index;
+        event["finish"] = false;
+        event["first_token_ms"] = first_token_ms;
+        channel->send("llm.delta", event, NODE_NO_ERROR);
+      };
+      if (!it->second.runtime->generate(prompt, text, metrics, delta_sender, error_message)) {
         nlohmann::json error;
         error["code"] = -53;
         error["message"] = error_message;
@@ -309,6 +361,16 @@ class LlmIpcService : public StackFlows::StackFlow {
 #endif
     {
       text = "Mock LLM response: " + prompt;
+      metrics["first_token_ms"] = 0.0;
+      metrics["total_ms"] = 0.0;
+      metrics["delta_count"] = 1;
+      metrics["stream"] = true;
+      nlohmann::json event;
+      event["delta"] = text;
+      event["index"] = 1;
+      event["finish"] = false;
+      event["first_token_ms"] = 0.0;
+      channel->send("llm.delta", event, NODE_NO_ERROR);
     }
 
     nlohmann::json response;
@@ -316,6 +378,7 @@ class LlmIpcService : public StackFlows::StackFlow {
     response["backend"] = it->second.backend;
     response["text"] = text;
     response["finish"] = true;
+    response["metrics"] = metrics;
     channel->send("llm.response", response, NODE_NO_ERROR);
   }
 

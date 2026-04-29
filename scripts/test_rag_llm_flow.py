@@ -47,6 +47,40 @@ def send_json(sock_file, payload, label):
     return response
 
 
+def send_json_stream(sock_file, payload, label, final_object):
+    print(f"[phase1-test] -> {label}", flush=True)
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    start = time.perf_counter()
+    sock_file.write(raw.encode("utf-8") + b"\n")
+    sock_file.flush()
+
+    deltas = []
+    first_delta_ms = None
+    while True:
+        response = recv_json(sock_file)
+        obj = response.get("object")
+        error = response_error(response)
+        if obj == "llm.delta":
+            if first_delta_ms is None:
+                first_delta_ms = (time.perf_counter() - start) * 1000.0
+            delta = response.get("data", {}).get("delta", "")
+            deltas.append(delta)
+            print(
+                f"[phase1-test] <- {label}: delta#{len(deltas)} bytes={len(delta.encode('utf-8'))}",
+                flush=True,
+            )
+            continue
+        print(f"[phase1-test] <- {label}: object={obj} error={error}", flush=True)
+        response.setdefault("data", {})
+        if isinstance(response["data"], dict):
+            response["data"].setdefault("stream_text", "".join(deltas))
+            response["data"].setdefault("stream_delta_count", len(deltas))
+            response["data"].setdefault("client_first_delta_ms", first_delta_ms)
+            response["data"].setdefault("client_total_ms", (time.perf_counter() - start) * 1000.0)
+        if obj == final_object or error.get("code") != 0:
+            return response
+
+
 def request_id(prefix):
     return f"{prefix}-{int(time.time() * 1000)}"
 
@@ -238,7 +272,7 @@ def main():
             rag_response = rag_cached_response
             rag_data = rag_response.get("data", {})
 
-            llm_response = send_json(sock_file, {
+            llm_response = send_json_stream(sock_file, {
                 "request_id": request_id("llm"),
                 "work_id": llm_work_id,
                 "action": "inference",
@@ -248,12 +282,14 @@ def main():
                     "context": rag_data["context"],
                     "prompt": rag_data.get("prompt", args.query),
                 },
-            }, "llm inference")
+            }, "llm inference", "llm.response")
             if response_error(llm_response).get("code") != 0:
                 raise AssertionError(f"LLM inference failed: {llm_response}")
             llm_data = llm_response.get("data", {})
             if not llm_data.get("text"):
                 raise AssertionError(f"LLM returned empty text: {llm_response}")
+            if not llm_data.get("stream_delta_count"):
+                raise AssertionError(f"LLM did not stream deltas: {llm_response}")
 
         print(json.dumps({
             "ok": True,
