@@ -18,13 +18,32 @@ def recv_json(sock_file):
     return json.loads(line.decode("utf-8"))
 
 
+def response_error(response):
+    error = response.get("error") if isinstance(response, dict) else None
+    if isinstance(error, dict):
+        return error
+    if isinstance(error, str):
+        if not error or error == "None":
+            return {"code": 0, "message": ""}
+        try:
+            parsed = json.loads(error)
+        except json.JSONDecodeError:
+            return {"code": -1, "message": error}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"code": -1, "message": str(parsed)}
+    if error is None:
+        return {"code": 0, "message": ""}
+    return {"code": -1, "message": str(error)}
+
+
 def send_json(sock_file, payload, label):
     print(f"[phase1-test] -> {label}", flush=True)
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     sock_file.write(raw.encode("utf-8") + b"\n")
     sock_file.flush()
     response = recv_json(sock_file)
-    print(f"[phase1-test] <- {label}: object={response.get('object')} error={response.get('error')}", flush=True)
+    print(f"[phase1-test] <- {label}: object={response.get('object')} error={response_error(response)}", flush=True)
     return response
 
 
@@ -166,7 +185,7 @@ def main():
                     "threshold": 0.5,
                 },
             }, "rag setup")
-            if rag_setup.get("error", {}).get("code") != 0:
+            if response_error(rag_setup).get("code") != 0:
                 raise AssertionError(f"RAG setup failed: {rag_setup}")
 
             llm_setup = send_json(sock_file, {
@@ -181,7 +200,7 @@ def main():
                     "require_real_backend": args.require_real_llm,
                 },
             }, "llm setup")
-            if llm_setup.get("error", {}).get("code") != 0:
+            if response_error(llm_setup).get("code") != 0:
                 raise AssertionError(f"LLM setup failed: {llm_setup}")
             if args.require_real_llm and llm_setup.get("data", {}).get("backend") != "rkllm":
                 raise AssertionError(f"LLM is not using rkllm backend: {llm_setup}")
@@ -196,7 +215,7 @@ def main():
                 "object": "rag.request",
                 "data": {"query": args.query},
             }, "rag inference")
-            if rag_response.get("error", {}).get("code") != 0:
+            if response_error(rag_response).get("code") != 0:
                 raise AssertionError(f"RAG inference failed: {rag_response}")
             rag_data = rag_response.get("data", {})
             if not rag_data.get("context"):
@@ -213,7 +232,7 @@ def main():
                     "prompt": rag_data.get("prompt", args.query),
                 },
             }, "llm inference")
-            if llm_response.get("error", {}).get("code") != 0:
+            if response_error(llm_response).get("code") != 0:
                 raise AssertionError(f"LLM inference failed: {llm_response}")
             llm_data = llm_response.get("data", {})
             if not llm_data.get("text"):

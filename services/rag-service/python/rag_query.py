@@ -6,7 +6,23 @@ import json
 import os
 import sys
 
-from vehicle_vector_search import VehicleVectorSearch
+
+def to_jsonable(value):
+    if isinstance(value, dict):
+        return {str(key): to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_jsonable(item) for item in value]
+    if hasattr(value, "tolist"):
+        try:
+            return to_jsonable(value.tolist())
+        except Exception:
+            pass
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
 
 
 def main():
@@ -24,6 +40,8 @@ def main():
     if not query:
         raise ValueError("query is empty")
 
+    from vehicle_vector_search import VehicleVectorSearch
+
     searcher = VehicleVectorSearch(
         os.path.normpath(args.model),
         os.path.normpath(args.vector_db),
@@ -33,12 +51,12 @@ def main():
     items = []
     for item in results:
         items.append({
-            "id": item.get("id"),
+            "id": to_jsonable(item.get("id")),
             "text": item.get("text", ""),
             "section": item.get("section", ""),
             "subsection": item.get("subsection", ""),
-            "similarity": item.get("similarity", 0.0),
-            "metadata": item.get("metadata", {}),
+            "similarity": to_jsonable(item.get("similarity", 0.0)),
+            "metadata": to_jsonable(item.get("metadata", {})),
         })
 
     context = "\n".join(item["text"] for item in items)
