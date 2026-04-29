@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+from pathlib import Path
 import socket
 import sys
 import time
@@ -25,6 +26,7 @@ def request_id(prefix, index):
 
 
 def main():
+    repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description="Phase1 gateway -> RAG -> LLM -> TTS smoke client")
     parser.add_argument("query", help="Query text to run through the phase1 services")
     parser.add_argument("--host", default="127.0.0.1")
@@ -41,7 +43,15 @@ def main():
             "work_id": "rag",
             "action": "setup",
             "object": "rag.setup",
-            "data": {},
+            "data": {
+                "model": str(repo / "models" / "rag" / "text2vec-base-chinese"),
+                "knowledge_db": str(repo / "services" / "rag-service" / "data" / "knowledge" / "vehicle_knowledge.sqlite"),
+                "script": str(repo / "services" / "rag-service" / "rag" / "query.py"),
+                "top_k": 3,
+                "candidate_k": 30,
+                "threshold": 0.35,
+                "context_chars": 1600,
+            },
         })
         llm_setup = send_json(sock_file, {
             "request_id": request_id("setup-llm", 2),

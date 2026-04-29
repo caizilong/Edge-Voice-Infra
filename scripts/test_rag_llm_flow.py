@@ -146,7 +146,7 @@ def main():
     log_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env.setdefault("EDGE_VOICE_CONFIG", str(repo / "config" / "master_config.json"))
-    env.setdefault("PYTHONPATH", str(repo / "services" / "rag-service" / "python"))
+    env.setdefault("PYTHONPATH", str(repo / "services" / "rag-service" / "rag"))
 
     named_processes = []
     try:
@@ -179,10 +179,12 @@ def main():
                 "object": "rag.setup",
                 "data": {
                     "model": str(repo / "models" / "rag" / "text2vec-base-chinese"),
-                    "vector_db": str(repo / "services" / "rag-service" / "python" / "vector_db"),
-                    "script": str(repo / "services" / "rag-service" / "python" / "rag_query.py"),
-                    "top_k": 1,
-                    "threshold": 0.5,
+                    "knowledge_db": str(repo / "services" / "rag-service" / "data" / "knowledge" / "vehicle_knowledge.sqlite"),
+                    "script": str(repo / "services" / "rag-service" / "rag" / "query.py"),
+                    "top_k": 3,
+                    "candidate_k": 30,
+                    "threshold": 0.35,
+                    "context_chars": 1600,
                 },
             }, "rag setup")
             if response_error(rag_setup).get("code") != 0:
@@ -220,6 +222,21 @@ def main():
             rag_data = rag_response.get("data", {})
             if not rag_data.get("context"):
                 raise AssertionError(f"RAG returned empty context: {rag_response}")
+
+            rag_cached_response = send_json(sock_file, {
+                "request_id": request_id("rag-cache"),
+                "work_id": rag_work_id,
+                "action": "inference",
+                "object": "rag.request",
+                "data": {"query": args.query},
+            }, "rag inference cache")
+            if response_error(rag_cached_response).get("code") != 0:
+                raise AssertionError(f"RAG cached inference failed: {rag_cached_response}")
+            cache_hit = rag_cached_response.get("data", {}).get("metrics", {}).get("cache_hit")
+            if cache_hit is not True:
+                raise AssertionError(f"RAG cache did not hit on repeated query: {rag_cached_response}")
+            rag_response = rag_cached_response
+            rag_data = rag_response.get("data", {})
 
             llm_response = send_json(sock_file, {
                 "request_id": request_id("llm"),
