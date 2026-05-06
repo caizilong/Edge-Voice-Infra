@@ -9,9 +9,15 @@ cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
   -DBUILD_GATEWAY=ON \
   -DBUILD_PHASE1_SERVICES=ON
 
-cmake --build "${BUILD_DIR}" --target \
-  unit_manager \
-  rag_ipc_service \
-  llm_ipc_service \
-  tts_ipc_service \
-  -j"$(nproc)"
+TARGETS=(
+  unit_manager
+  rag_ipc_service
+  llm_ipc_service
+  tts_ipc_service
+)
+
+if [[ -f "${ROOT_DIR}/third-party/SummerTTS/include/SynthesizerTrn.h" ]]; then
+  TARGETS+=(edge_tts_service)
+fi
+
+cmake --build "${BUILD_DIR}" --target "${TARGETS[@]}" -j"$(nproc)"

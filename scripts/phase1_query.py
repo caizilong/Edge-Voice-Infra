@@ -97,10 +97,16 @@ def main():
     parser.add_argument("query", help="Query text to run through the phase1 services")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=10001)
-    parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--require-real-llm", action="store_true")
+    parser.add_argument("--require-real-tts", action="store_true")
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--context-chars", type=int, default=1600)
+    parser.add_argument("--tts-speaker-id", type=int, default=0)
+    parser.add_argument("--tts-length-scale", type=float, default=1.0)
+    parser.add_argument("--tts-timeout-sec", type=int, default=120)
+    parser.add_argument("--tts-model", default="")
+    parser.add_argument("--edge-tts-executable", default="")
     args = parser.parse_args()
 
     setup_start = time.perf_counter()
@@ -141,14 +147,28 @@ def main():
         if args.require_real_llm and llm_setup.get("data", {}).get("backend") != "rkllm":
             raise RuntimeError(f"llm setup did not use rkllm backend: {llm_setup}")
 
+        tts_config = {
+            "output_dir": "/tmp/edge_voice_tts",
+            "speaker_id": args.tts_speaker_id,
+            "length_scale": args.tts_length_scale,
+            "timeout_sec": args.tts_timeout_sec,
+            "require_real_backend": args.require_real_tts,
+        }
+        if args.tts_model:
+            tts_config["model"] = args.tts_model
+        if args.edge_tts_executable:
+            tts_config["edge_tts_executable"] = args.edge_tts_executable
+
         tts_setup, tts_setup_ms = send_json_timed(sock_file, {
             "request_id": request_id("setup-tts", 3),
             "work_id": "tts",
             "action": "setup",
             "object": "tts.setup",
-            "data": {"output_dir": "/tmp/edge_voice_tts"},
+            "data": tts_config,
         })
         ensure_ok("tts setup", tts_setup)
+        if args.require_real_tts and tts_setup.get("data", {}).get("backend") != "summertts-subprocess":
+            raise RuntimeError(f"tts setup did not use SummerTTS backend: {tts_setup}")
 
         rag_work_id = rag_setup["work_id"]
         llm_work_id = llm_setup["work_id"]
@@ -201,6 +221,14 @@ def main():
             "data": {"text": llm_text},
         })
         ensure_ok("tts inference", tts_response)
+        tts_data = tts_response.get("data", {})
+        tts_artifact = tts_data.get("artifact", "")
+        if args.require_real_tts:
+            if tts_data.get("mime_type") != "audio/wav":
+                raise RuntimeError(f"tts did not return wav output: {tts_response}")
+            artifact_path = Path(tts_artifact)
+            if not artifact_path.exists() or artifact_path.stat().st_size <= 44:
+                raise RuntimeError(f"tts wav artifact is missing or invalid: {tts_artifact}")
         end_to_end_ms = (time.perf_counter() - pipeline_start) * 1000.0
         demo_total_ms = (time.perf_counter() - demo_start) * 1000.0
 

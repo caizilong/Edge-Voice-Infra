@@ -2,11 +2,23 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVICE_DIR="${ROOT_DIR}/services/tts-service"
-BUILD_DIR="${SERVICE_DIR}/build"
+BUILD_DIR="${ROOT_DIR}/build-tts"
 
 mkdir -p "${BUILD_DIR}"
-cmake -S "${SERVICE_DIR}" -B "${BUILD_DIR}"
-cmake --build "${BUILD_DIR}" -j"$(nproc)"
+cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
+  -DBUILD_STACKFLOW=ON \
+  -DBUILD_GATEWAY=OFF \
+  -DBUILD_PHASE1_SERVICES=ON
 
-echo "build done: ${BUILD_DIR}/tts_service"
+TARGETS=(tts_ipc_service)
+if [[ -f "${ROOT_DIR}/third-party/SummerTTS/include/SynthesizerTrn.h" ]]; then
+  TARGETS+=(edge_tts_service)
+fi
+
+cmake --build "${BUILD_DIR}" --target "${TARGETS[@]}" -j"$(nproc)"
+
+echo "build done:"
+echo "  ${BUILD_DIR}/services/tts-service/tts_ipc_service"
+if [[ -f "${ROOT_DIR}/third-party/SummerTTS/include/SynthesizerTrn.h" ]]; then
+  echo "  ${BUILD_DIR}/services/tts-service/edge_tts_service"
+fi
