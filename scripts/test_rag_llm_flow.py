@@ -99,6 +99,15 @@ def wait_for_tcp(host, port, timeout):
     raise RuntimeError(f"gateway did not listen on {host}:{port}: {last_error}")
 
 
+def tcp_accepts(host, port, timeout=0.5):
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.close()
+        return True
+    except OSError:
+        return False
+
+
 def wait_for_path(path, timeout, label):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -162,6 +171,16 @@ def dump_process_logs(processes):
             print(f"\n===== {name} output =====\n(no output, log={log_path})", file=sys.stderr)
 
 
+def port_in_use_message(host, port):
+    return (
+        f"gateway TCP port {host}:{port} is already in use before this test starts.\n"
+        "Stop the old gateway first, for example:\n"
+        f"  ss -ltnp 'sport = :{port}'\n"
+        f"  fuser -k {port}/tcp\n"
+        "If you intentionally want to use already running gateway/RAG/LLM services, rerun with --no-start."
+    )
+
+
 def main():
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description="Run RAG -> LLM IPC flow through gateway")
@@ -185,6 +204,8 @@ def main():
     named_processes = []
     try:
         if not args.no_start:
+            if tcp_accepts(args.host, args.port):
+                raise RuntimeError(port_in_use_message(args.host, args.port))
             executables = [
                 ("gateway", build_dir / "common" / "gateway" / "unit_manager"),
                 ("rag", build_dir / "services" / "rag-service" / "rag_ipc_service"),

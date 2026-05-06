@@ -16,6 +16,13 @@ namespace {
 
 typedef struct sockaddr SA;
 
+socklen_t sockaddr_len(const struct sockaddr *addr) {
+    if (addr->sa_family == AF_INET) {
+        return static_cast<socklen_t>(sizeof(struct sockaddr_in));
+    }
+    return static_cast<socklen_t>(sizeof(struct sockaddr_in6));
+}
+
 #if VALGRIND || defined(NO_ACCEPT4)
 void setNonBlockAndCloseOnExec(int sockfd) {
     int flags = ::fcntl(sockfd, F_GETFL, 0);
@@ -69,9 +76,9 @@ int sockets::createNonblockingOrDie(sa_family_t family) {
 }
 
 void sockets::bindOrDie(int sockfd, const struct sockaddr *addr) {
-    int ret = ::bind(sockfd, addr, static_cast<socklen_t>(sizeof(struct sockaddr_in6)));
+    int ret = ::bind(sockfd, addr, sockaddr_len(addr));
     if (ret < 0) {
-        LOG(FATAL) << "sockets::bindOrDie";
+        PLOG(FATAL) << "sockets::bindOrDie";
     }
 }
 
