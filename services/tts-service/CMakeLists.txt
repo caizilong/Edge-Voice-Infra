@@ -79,6 +79,11 @@ add_executable(edge_tts_service
   ${SUMMERTTS_SRC}
 )
 
+set_target_properties(edge_tts_service PROPERTIES
+  CXX_STANDARD 14
+  CXX_STANDARD_REQUIRED ON
+)
+
 target_include_directories(edge_tts_service PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${SUMMERTTS_ROOT}/include
