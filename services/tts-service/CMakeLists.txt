@@ -79,12 +79,21 @@ add_executable(edge_tts_service
   ${SUMMERTTS_SRC}
 )
 
+add_executable(edge_tts_worker
+  src/worker.cpp
+  ${SUMMERTTS_SRC}
+)
+
 set_target_properties(edge_tts_service PROPERTIES
   CXX_STANDARD 14
   CXX_STANDARD_REQUIRED ON
 )
+set_target_properties(edge_tts_worker PROPERTIES
+  CXX_STANDARD 14
+  CXX_STANDARD_REQUIRED ON
+)
 
-target_include_directories(edge_tts_service PRIVATE
+set(SUMMERTTS_INCLUDE_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${SUMMERTTS_ROOT}/include
   ${SUMMERTTS_ROOT}/src/header
@@ -92,16 +101,25 @@ target_include_directories(edge_tts_service PRIVATE
   ${SUMMERTTS_ROOT}/eigen-3.4.0
 )
 
-target_compile_options(edge_tts_service PRIVATE
+target_include_directories(edge_tts_service PRIVATE ${SUMMERTTS_INCLUDE_DIRS})
+target_include_directories(edge_tts_worker PRIVATE
+  ${SUMMERTTS_INCLUDE_DIRS}
+  ${REPO_ROOT}/third-party
+)
+
+set(SUMMERTTS_COMPILE_OPTIONS
   -O3
   -fopenmp
   -include stdint.h
   -Wno-stringop-overflow
 )
+target_compile_options(edge_tts_service PRIVATE ${SUMMERTTS_COMPILE_OPTIONS})
+target_compile_options(edge_tts_worker PRIVATE ${SUMMERTTS_COMPILE_OPTIONS})
 
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(edge_tts_service OpenMP::OpenMP_CXX)
+  target_link_libraries(edge_tts_worker OpenMP::OpenMP_CXX)
 endif()
 
 else()

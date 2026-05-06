@@ -18,6 +18,7 @@ TARGETS=(
 
 if [[ -f "${ROOT_DIR}/third-party/SummerTTS/include/SynthesizerTrn.h" ]]; then
   TARGETS+=(edge_tts_service)
+  TARGETS+=(edge_tts_worker)
 fi
 
 cmake --build "${BUILD_DIR}" --target "${TARGETS[@]}" -j"$(nproc)"

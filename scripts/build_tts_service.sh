@@ -13,6 +13,7 @@ cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
 TARGETS=(tts_ipc_service)
 if [[ -f "${ROOT_DIR}/third-party/SummerTTS/include/SynthesizerTrn.h" ]]; then
   TARGETS+=(edge_tts_service)
+  TARGETS+=(edge_tts_worker)
 fi
 
 cmake --build "${BUILD_DIR}" --target "${TARGETS[@]}" -j"$(nproc)"
@@ -21,4 +22,5 @@ echo "build done:"
 echo "  ${BUILD_DIR}/services/tts-service/tts_ipc_service"
 if [[ -f "${ROOT_DIR}/third-party/SummerTTS/include/SynthesizerTrn.h" ]]; then
   echo "  ${BUILD_DIR}/services/tts-service/edge_tts_service"
+  echo "  ${BUILD_DIR}/services/tts-service/edge_tts_worker"
 fi
