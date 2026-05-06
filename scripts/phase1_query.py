@@ -369,6 +369,7 @@ def main():
     parser.add_argument("--require-real-tts", action="store_true")
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--context-chars", type=int, default=1600)
+    parser.add_argument("--rag-python-executable", default=sys.executable)
     parser.add_argument("--tts-speaker-id", type=int, default=0)
     parser.add_argument("--tts-length-scale", type=float, default=1.0)
     parser.add_argument("--tts-timeout-sec", type=int, default=120)
@@ -396,6 +397,7 @@ def main():
                 "model": str(repo / "models" / "rag" / "text2vec-base-chinese"),
                 "knowledge_db": str(repo / "services" / "rag-service" / "data" / "knowledge" / "vehicle_knowledge.sqlite"),
                 "script": str(repo / "services" / "rag-service" / "rag" / "query.py"),
+                "python_executable": args.rag_python_executable,
                 "top_k": 3,
                 "candidate_k": 30,
                 "threshold": 0.35,

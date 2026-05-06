@@ -137,9 +137,11 @@ bool write_all(int fd, const std::string& data) {
 
 class RagWorker {
  public:
-  RagWorker(std::string script_path, std::string model_path, std::string knowledge_db_path,
-            int top_k, int candidate_k, double threshold, int context_chars)
-      : script_path_(std::move(script_path)),
+  RagWorker(std::string python_executable, std::string script_path, std::string model_path,
+            std::string knowledge_db_path, int top_k, int candidate_k, double threshold,
+            int context_chars)
+      : python_executable_(std::move(python_executable)),
+        script_path_(std::move(script_path)),
         model_path_(std::move(model_path)),
         knowledge_db_path_(std::move(knowledge_db_path)),
         top_k_(top_k),
@@ -217,15 +219,10 @@ class RagWorker {
       const std::string candidate_k = std::to_string(candidate_k_);
       const std::string threshold = std::to_string(threshold_);
       const std::string context_chars = std::to_string(context_chars_);
-      execlp("python3", "python3",
-             script_path_.c_str(),
-             "--worker",
-             "--model", model_path_.c_str(),
-             "--db", knowledge_db_path_.c_str(),
-             "--top-k", top_k.c_str(),
-             "--candidate-k", candidate_k.c_str(),
-             "--threshold", threshold.c_str(),
-             "--context-chars", context_chars.c_str(),
+      execlp(python_executable_.c_str(), python_executable_.c_str(), script_path_.c_str(),
+             "--worker", "--model", model_path_.c_str(), "--db", knowledge_db_path_.c_str(),
+             "--top-k", top_k.c_str(), "--candidate-k", candidate_k.c_str(), "--threshold",
+             threshold.c_str(), "--context-chars", context_chars.c_str(),
              static_cast<char*>(nullptr));
       _exit(127);
     }
@@ -313,6 +310,7 @@ class RagWorker {
     }
   }
 
+  std::string python_executable_;
   std::string script_path_;
   std::string model_path_;
   std::string knowledge_db_path_;
@@ -374,6 +372,9 @@ class RagService : public StackFlows::StackFlow {
       if (config.contains("script") && config["script"].is_string()) {
         task->script_path = config["script"].get<std::string>();
       }
+      if (config.contains("python_executable") && config["python_executable"].is_string()) {
+        task->python_executable = config["python_executable"].get<std::string>();
+      }
       if (config.contains("top_k") && config["top_k"].is_number_integer()) {
         task->top_k = config["top_k"].get<int>();
       }
@@ -419,6 +420,7 @@ class RagService : public StackFlows::StackFlow {
     response["backend"] = "sqlite-fts5-python-vector";
     response["model"] = task->model_path;
     response["knowledge_db"] = task->knowledge_db_path;
+    response["python_executable"] = task->python_executable;
     send("rag.setup", response, NODE_NO_ERROR, work_id);
     return 0;
   }
@@ -458,6 +460,7 @@ class RagService : public StackFlows::StackFlow {
     std::string model_path;
     std::string knowledge_db_path;
     std::string script_path;
+    std::string python_executable;
     int top_k = 3;
     int candidate_k = 30;
     int context_chars = 1600;
@@ -491,12 +494,16 @@ class RagService : public StackFlows::StackFlow {
             "/home/pi/Edge-Voice-Infra/services/rag-service/rag/query.py",
         });
       }
+      if (python_executable.empty()) {
+        python_executable = "python3";
+      }
     }
 
     std::string cache_key(const std::string& query) const {
       return query + "\n" + model_path + "\n" + knowledge_db_path + "\n" + script_path +
-             "\n" + std::to_string(top_k) + "\n" + std::to_string(candidate_k) + "\n" +
-             std::to_string(threshold) + "\n" + std::to_string(context_chars);
+             "\n" + python_executable + "\n" + std::to_string(top_k) + "\n" +
+             std::to_string(candidate_k) + "\n" + std::to_string(threshold) + "\n" +
+             std::to_string(context_chars);
     }
 
     bool get_cached(const std::string& key, nlohmann::json& result) {
@@ -533,7 +540,7 @@ class RagService : public StackFlows::StackFlow {
 
     RagWorker& get_worker() {
       if (!worker) {
-        worker = std::make_unique<RagWorker>(script_path, model_path, knowledge_db_path,
+        worker = std::make_unique<RagWorker>(python_executable, script_path, model_path, knowledge_db_path,
                                              top_k, candidate_k, threshold, context_chars);
       }
       return *worker;
