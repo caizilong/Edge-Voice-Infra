@@ -89,6 +89,7 @@ void EventLoop::loop() {
     eventHandling_ = false;
     doPendingFunctors();
   }
+  doPendingFunctors();
 
   LOG(INFO) << "EventLoop " << this << " stop looping";
   looping_ = false;

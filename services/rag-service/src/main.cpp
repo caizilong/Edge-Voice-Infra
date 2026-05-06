@@ -1,9 +1,11 @@
 #include <array>
 #include <cerrno>
 #include <csignal>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -11,6 +13,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -324,62 +327,84 @@ class RagWorker {
 
 class RagService : public StackFlows::StackFlow {
  public:
-  RagService() : StackFlow("rag") {}
+  RagService() : StackFlow("rag") {
+    worker_ = std::jthread([this](std::stop_token stoken) { worker_loop(stoken); });
+  }
+
+  ~RagService() override {
+    {
+      std::scoped_lock lock(queue_mutex_);
+      stopping_ = true;
+      inference_queue_.clear();
+    }
+    queue_cv_.notify_all();
+    if (worker_.joinable()) {
+      worker_.request_stop();
+      worker_.join();
+    }
+  }
 
   int setup(const std::string& work_id, const std::string& object,
             const std::string& data) override {
     (void)object;
     int work_id_num = StackFlows::sample_get_work_id_num(work_id);
     auto channel = get_channel(work_id);
+    if (!channel) {
+      send("rag.error", "missing channel", NODE_NO_ERROR, work_id);
+      return -1;
+    }
     channel->set_output(true);
     channel->set_stream(false);
 
-    RagTask task;
+    auto task = std::make_shared<RagTask>();
     try {
       auto config = nlohmann::json::parse(data.empty() ? "{}" : data);
       if (config.contains("knowledge_file") && config["knowledge_file"].is_string()) {
-        task.knowledge = load_text_file(config["knowledge_file"].get<std::string>());
+        task->knowledge = load_text_file(config["knowledge_file"].get<std::string>());
       }
       if (config.contains("model") && config["model"].is_string()) {
-        task.model_path = config["model"].get<std::string>();
+        task->model_path = config["model"].get<std::string>();
       }
       if (config.contains("vector_db") && config["vector_db"].is_string()) {
-        task.knowledge_db_path = config["vector_db"].get<std::string>();
+        task->knowledge_db_path = config["vector_db"].get<std::string>();
       }
       if (config.contains("knowledge_db") && config["knowledge_db"].is_string()) {
-        task.knowledge_db_path = config["knowledge_db"].get<std::string>();
+        task->knowledge_db_path = config["knowledge_db"].get<std::string>();
       }
       if (config.contains("script") && config["script"].is_string()) {
-        task.script_path = config["script"].get<std::string>();
+        task->script_path = config["script"].get<std::string>();
       }
       if (config.contains("top_k") && config["top_k"].is_number_integer()) {
-        task.top_k = config["top_k"].get<int>();
+        task->top_k = config["top_k"].get<int>();
       }
       if (config.contains("threshold") && config["threshold"].is_number()) {
-        task.threshold = config["threshold"].get<double>();
+        task->threshold = config["threshold"].get<double>();
       }
       if (config.contains("candidate_k") && config["candidate_k"].is_number_integer()) {
-        task.candidate_k = config["candidate_k"].get<int>();
+        task->candidate_k = config["candidate_k"].get<int>();
       }
       if (config.contains("context_chars") && config["context_chars"].is_number_integer()) {
-        task.context_chars = config["context_chars"].get<int>();
+        task->context_chars = config["context_chars"].get<int>();
       }
       if (config.contains("cache_size") && config["cache_size"].is_number_integer()) {
-        task.cache_size = config["cache_size"].get<size_t>();
+        task->cache_size = config["cache_size"].get<size_t>();
       }
     } catch (...) {
     }
-    task.fill_defaults();
-    tasks_[work_id_num] = std::move(task);
-    if (tasks_[work_id_num].knowledge.empty()) {
+    task->fill_defaults();
+    if (task->knowledge.empty()) {
       std::string error_message;
-      if (!tasks_[work_id_num].get_worker().start(error_message)) {
+      if (!task->get_worker().start(error_message)) {
         nlohmann::json error;
         error["code"] = -31;
         error["message"] = error_message;
         send("rag.error", "None", error.dump(), work_id);
         return -1;
       }
+    }
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      tasks_[work_id_num] = task;
     }
 
     channel->subscriber_work_id(
@@ -392,8 +417,8 @@ class RagService : public StackFlows::StackFlow {
     response["service"] = "rag";
     response["status"] = "ready";
     response["backend"] = "sqlite-fts5-python-vector";
-    response["model"] = tasks_[work_id_num].model_path;
-    response["knowledge_db"] = tasks_[work_id_num].knowledge_db_path;
+    response["model"] = task->model_path;
+    response["knowledge_db"] = task->knowledge_db_path;
     send("rag.setup", response, NODE_NO_ERROR, work_id);
     return 0;
   }
@@ -404,7 +429,10 @@ class RagService : public StackFlows::StackFlow {
     (void)data;
     nlohmann::json response;
     response["service"] = "rag";
-    response["active_tasks"] = tasks_.size();
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      response["active_tasks"] = tasks_.size();
+    }
     send("rag.taskinfo", response, NODE_NO_ERROR, work_id);
   }
 
@@ -413,12 +441,12 @@ class RagService : public StackFlows::StackFlow {
     (void)object;
     (void)data;
     int work_id_num = StackFlows::sample_get_work_id_num(work_id);
-    auto it = tasks_.find(work_id_num);
-    if (it != tasks_.end()) {
-      if (auto channel = get_channel(work_id_num)) {
-        channel->stop_subscriber_work_id("");
-      }
-      tasks_.erase(it);
+    if (auto channel = get_channel(work_id_num)) {
+      channel->stop_subscriber_work_id("");
+    }
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      tasks_.erase(work_id_num);
     }
     send("rag.exit", "ok", NODE_NO_ERROR, work_id);
     return 0;
@@ -533,11 +561,53 @@ class RagService : public StackFlows::StackFlow {
     return true;
   }
 
+  struct InferenceRequest {
+    int work_id_num = 0;
+    std::weak_ptr<StackFlows::NodeChannel> weak_channel;
+    std::string object;
+    std::string data;
+  };
+
   void on_inference(int work_id_num,
                     std::weak_ptr<StackFlows::NodeChannel> weak_channel,
                     const std::string& object, const std::string& data) {
+    {
+      std::scoped_lock lock(queue_mutex_);
+      if (stopping_) {
+        return;
+      }
+      inference_queue_.push_back({work_id_num, std::move(weak_channel), object, data});
+    }
+    queue_cv_.notify_one();
+  }
+
+  void worker_loop(std::stop_token stoken) {
+    while (true) {
+      InferenceRequest request;
+      {
+        std::unique_lock lock(queue_mutex_);
+        queue_cv_.wait(lock, [&] {
+          return stopping_ || stoken.stop_requested() || !inference_queue_.empty();
+        });
+        if (inference_queue_.empty()) {
+          if (stopping_ || stoken.stop_requested()) {
+            break;
+          }
+          continue;
+        }
+        request = std::move(inference_queue_.front());
+        inference_queue_.pop_front();
+      }
+      process_inference(request);
+    }
+  }
+
+  void process_inference(const InferenceRequest& request) {
+    int work_id_num = request.work_id_num;
+    const std::string& object = request.object;
+    const std::string& data = request.data;
     (void)object;
-    auto channel = weak_channel.lock();
+    auto channel = request.weak_channel.lock();
     if (!channel) {
       return;
     }
@@ -553,14 +623,21 @@ class RagService : public StackFlows::StackFlow {
 
     const std::string query_type = classify_query(query);
     std::string context = default_context(query_type);
-    auto it = tasks_.find(work_id_num);
+    std::shared_ptr<RagTask> task;
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      auto it = tasks_.find(work_id_num);
+      if (it != tasks_.end()) {
+        task = it->second;
+      }
+    }
     nlohmann::json rag_result;
-    if (it != tasks_.end()) {
-      if (!it->second.knowledge.empty()) {
-        context = it->second.knowledge;
+    if (task) {
+      if (!task->knowledge.empty()) {
+        context = task->knowledge;
       } else {
         std::string error_message;
-        if (!run_rag(it->second, query, rag_result, error_message)) {
+        if (!run_rag(*task, query, rag_result, error_message)) {
           nlohmann::json error;
           error["code"] = -31;
           error["message"] = error_message;
@@ -586,7 +663,13 @@ class RagService : public StackFlows::StackFlow {
     channel->send("rag.response", response, NODE_NO_ERROR);
   }
 
-  std::unordered_map<int, RagTask> tasks_;
+  std::mutex tasks_mutex_;
+  std::unordered_map<int, std::shared_ptr<RagTask>> tasks_;
+  std::mutex queue_mutex_;
+  std::condition_variable queue_cv_;
+  std::deque<InferenceRequest> inference_queue_;
+  std::jthread worker_;
+  bool stopping_ = false;
 };
 
 }  // namespace

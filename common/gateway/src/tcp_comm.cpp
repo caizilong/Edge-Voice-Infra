@@ -99,6 +99,7 @@ void tcp_work() {
       while (::read(gateway_signal_fd, &value, sizeof(value)) == sizeof(value)) {
       }
       if (main_exit_flage != 0) {
+        server.reset();
         loop.quit();
       }
     });
@@ -116,6 +117,13 @@ void tcp_work() {
 }
 
 void tcp_stop_work() {
-  loop.quit();
-  server.reset();
+  if (loop.isInLoopThread()) {
+    server.reset();
+    loop.quit();
+    return;
+  }
+  loop.runInLoop([]() {
+    server.reset();
+    loop.quit();
+  });
 }

@@ -60,7 +60,11 @@ public:
         } else {
             return nullptr;
         }
-        return task_channels_.at(_work_id_num);
+        auto it = task_channels_.find(_work_id_num);
+        if (it == task_channels_.end()) {
+            return nullptr;
+        }
+        return it->second;
     }
 
     std::string _rpc_setup(ZmqEndpoint* _ZmqEndpoint, const std::shared_ptr<ZmqMessage>& data);
@@ -171,6 +175,6 @@ public:
 	        return false;
 	    }
     bool sys_release_unit(int work_id_num, const std::string& work_id);
-    ~StackFlow();
+    virtual ~StackFlow();
 };
 };  // namespace StackFlows

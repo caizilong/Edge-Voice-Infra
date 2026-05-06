@@ -1,6 +1,7 @@
 #include <csignal>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -60,6 +61,10 @@ class TtsIpcService : public StackFlows::StackFlow {
     (void)object;
     int work_id_num = StackFlows::sample_get_work_id_num(work_id);
     auto channel = get_channel(work_id);
+    if (!channel) {
+      send("tts.error", "missing channel", NODE_NO_ERROR, work_id);
+      return -1;
+    }
     channel->set_output(true);
     channel->set_stream(false);
 
@@ -72,7 +77,10 @@ class TtsIpcService : public StackFlows::StackFlow {
     } catch (...) {
     }
     mkdir(task.output_dir.c_str(), 0777);
-    tasks_[work_id_num] = task;
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      tasks_[work_id_num] = task;
+    }
 
     channel->subscriber_work_id(
         "", [this, weak_channel = std::weak_ptr<StackFlows::NodeChannel>(channel),
@@ -84,7 +92,7 @@ class TtsIpcService : public StackFlows::StackFlow {
     response["service"] = "tts";
     response["status"] = "ready";
     response["backend"] = "phase1-text-artifact";
-    response["output_dir"] = tasks_[work_id_num].output_dir;
+    response["output_dir"] = task.output_dir;
     send("tts.setup", response, NODE_NO_ERROR, work_id);
     return 0;
   }
@@ -95,7 +103,10 @@ class TtsIpcService : public StackFlows::StackFlow {
     (void)data;
     nlohmann::json response;
     response["service"] = "tts";
-    response["active_tasks"] = tasks_.size();
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      response["active_tasks"] = tasks_.size();
+    }
     send("tts.taskinfo", response, NODE_NO_ERROR, work_id);
   }
 
@@ -104,12 +115,12 @@ class TtsIpcService : public StackFlows::StackFlow {
     (void)object;
     (void)data;
     int work_id_num = StackFlows::sample_get_work_id_num(work_id);
-    auto it = tasks_.find(work_id_num);
-    if (it != tasks_.end()) {
-      if (auto channel = get_channel(work_id_num)) {
-        channel->stop_subscriber_work_id("");
-      }
-      tasks_.erase(it);
+    if (auto channel = get_channel(work_id_num)) {
+      channel->stop_subscriber_work_id("");
+    }
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      tasks_.erase(work_id_num);
     }
     send("tts.exit", "ok", NODE_NO_ERROR, work_id);
     return 0;
@@ -138,9 +149,23 @@ class TtsIpcService : public StackFlows::StackFlow {
       return;
     }
 
-    auto& task = tasks_[work_id_num];
+    TtsTask task;
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      auto it = tasks_.find(work_id_num);
+      if (it == tasks_.end()) {
+        nlohmann::json error;
+        error["code"] = -6;
+        error["message"] = "Unit does not exist";
+        channel->send("tts.error", "None", error.dump());
+        return;
+      }
+      task = it->second;
+      task.counter++;
+      it->second.counter = task.counter;
+    }
     const std::string artifact =
-        task.output_dir + "/tts_phase1_" + std::to_string(++task.counter) + ".txt";
+        task.output_dir + "/tts_phase1_" + std::to_string(task.counter) + ".txt";
     std::ofstream out(artifact);
     out << text << "\n";
     out.close();
@@ -153,6 +178,7 @@ class TtsIpcService : public StackFlows::StackFlow {
     channel->send("tts.response", response, NODE_NO_ERROR);
   }
 
+  std::mutex tasks_mutex_;
   std::unordered_map<int, TtsTask> tasks_;
 };
 

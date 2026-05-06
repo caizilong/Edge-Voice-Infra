@@ -47,7 +47,9 @@ StackFlow::~StackFlow() {
 }
 
 void StackFlow::even_loop() {
+#if defined(__linux__)
     pthread_setname_np(pthread_self(), "even_loop");
+#endif
 
     while (!exit_flage_.load()) {
         event_queue_.wait();
@@ -71,6 +73,11 @@ int StackFlow::setup(const std::string& zmq_url, const std::string& raw) {
     }
     std::string work_id = unit_name_ + "." + std::to_string(workid_num);
     auto task_channel = get_channel(workid_num);
+    if (!task_channel) {
+        ALOGE("StackFlow::setup missing channel, work_id:%s", work_id.c_str());
+        sys_release_unit(workid_num, work_id);
+        return -1;
+    }
     task_channel->set_push_url(zmq_url);
     task_channel->request_id_ = sample_json_str_get(raw, "request_id");
     task_channel->work_id_ = work_id;
@@ -98,10 +105,11 @@ std::string StackFlow::_rpc_exit(ZmqEndpoint* _ZmqEndpoint, const std::shared_pt
 int StackFlow::exit(const std::string& zmq_url, const std::string& raw) {
     ALOGI("StackFlow::exit raw");
     std::string work_id = sample_json_str_get(raw, "work_id");
-    try {
+    {
         auto task_channel = get_channel(sample_get_work_id_num(work_id));
+        if (task_channel) {
         task_channel->set_push_url(zmq_url);
-    } catch (...) {
+        }
     }
     if (exit(work_id, sample_json_str_get(raw, "object"), sample_json_str_get(raw, "data")) == 0) {
         return (int)sys_release_unit(-1, work_id);
@@ -128,10 +136,11 @@ std::string StackFlow::_rpc_pause(ZmqEndpoint* _ZmqEndpoint, const std::shared_p
 void StackFlow::pause(const std::string& zmq_url, const std::string& raw) {
     ALOGI("StackFlow::pause raw");
     std::string work_id = sample_json_str_get(raw, "work_id");
-    try {
+    {
         auto task_channel = get_channel(sample_get_work_id_num(work_id));
+        if (task_channel) {
         task_channel->set_push_url(zmq_url);
-    } catch (...) {
+        }
     }
     pause(work_id, sample_json_str_get(raw, "object"), sample_json_str_get(raw, "data"));
 }
@@ -153,10 +162,11 @@ std::string StackFlow::_rpc_taskinfo(ZmqEndpoint* _ZmqEndpoint, const std::share
 
 void StackFlow::taskinfo(const std::string& zmq_url, const std::string& raw) {
     std::string work_id = sample_json_str_get(raw, "work_id");
-    try {
+    {
         auto task_channel = get_channel(sample_get_work_id_num(work_id));
+        if (task_channel) {
         task_channel->set_push_url(zmq_url);
-    } catch (...) {
+        }
     }
     taskinfo(work_id, sample_json_str_get(raw, "object"), sample_json_str_get(raw, "data"));
 }

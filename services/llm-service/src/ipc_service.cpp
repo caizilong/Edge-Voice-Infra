@@ -1,11 +1,14 @@
 #include <csignal>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -195,40 +198,59 @@ class RkllmRuntime {
 
 class LlmIpcService : public StackFlows::StackFlow {
  public:
-  LlmIpcService() : StackFlow("llm") {}
+  LlmIpcService() : StackFlow("llm") {
+    worker_ = std::jthread([this](std::stop_token stoken) { worker_loop(stoken); });
+  }
+
+  ~LlmIpcService() override {
+    {
+      std::scoped_lock lock(queue_mutex_);
+      stopping_ = true;
+      inference_queue_.clear();
+    }
+    queue_cv_.notify_all();
+    if (worker_.joinable()) {
+      worker_.request_stop();
+      worker_.join();
+    }
+  }
 
   int setup(const std::string& work_id, const std::string& object,
             const std::string& data) override {
     (void)object;
     int work_id_num = StackFlows::sample_get_work_id_num(work_id);
     auto channel = get_channel(work_id);
+    if (!channel) {
+      send("llm.error", "missing channel", NODE_NO_ERROR, work_id);
+      return -1;
+    }
     channel->set_output(true);
     channel->set_stream(true);
 
-    LlmTask task;
+    auto task = std::make_shared<LlmTask>();
     try {
       auto config = nlohmann::json::parse(data.empty() ? "{}" : data);
       if (config.contains("model") && config["model"].is_string()) {
-        task.model = config["model"].get<std::string>();
+        task->model = config["model"].get<std::string>();
       }
       if (config.contains("max_new_tokens") && config["max_new_tokens"].is_number_integer()) {
-        task.max_new_tokens = config["max_new_tokens"].get<int>();
+        task->max_new_tokens = config["max_new_tokens"].get<int>();
       }
       if (config.contains("max_context_len") && config["max_context_len"].is_number_integer()) {
-        task.max_context_len = config["max_context_len"].get<int>();
+        task->max_context_len = config["max_context_len"].get<int>();
       }
       if (config.contains("require_real_backend") && config["require_real_backend"].is_boolean()) {
-        task.require_real_backend = config["require_real_backend"].get<bool>();
+        task->require_real_backend = config["require_real_backend"].get<bool>();
       }
     } catch (...) {
     }
-    task.fill_defaults();
+    task->fill_defaults();
 
 #if EDGE_ENABLE_RKLLM
-    task.backend = "rkllm";
-    task.runtime = std::make_unique<RkllmRuntime>();
+    task->backend = "rkllm";
+    task->runtime = std::make_unique<RkllmRuntime>();
     std::string error_message;
-    if (!task.runtime->init(task.model, task.max_new_tokens, task.max_context_len, error_message)) {
+    if (!task->runtime->init(task->model, task->max_new_tokens, task->max_context_len, error_message)) {
       nlohmann::json error;
       error["code"] = -51;
       error["message"] = error_message;
@@ -236,8 +258,8 @@ class LlmIpcService : public StackFlows::StackFlow {
       return -1;
     }
 #else
-    task.backend = "mock-no-rkllm-runtime";
-    if (task.require_real_backend) {
+    task->backend = "mock-no-rkllm-runtime";
+    if (task->require_real_backend) {
       nlohmann::json error;
       error["code"] = -52;
       error["message"] = "RKLLM runtime was not found at build time";
@@ -246,7 +268,10 @@ class LlmIpcService : public StackFlows::StackFlow {
     }
 #endif
 
-    tasks_[work_id_num] = std::move(task);
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      tasks_[work_id_num] = task;
+    }
 
     channel->subscriber_work_id(
         "", [this, weak_channel = std::weak_ptr<StackFlows::NodeChannel>(channel),
@@ -257,8 +282,8 @@ class LlmIpcService : public StackFlows::StackFlow {
     nlohmann::json response;
     response["service"] = "llm";
     response["status"] = "ready";
-    response["backend"] = tasks_[work_id_num].backend;
-    response["model"] = tasks_[work_id_num].model;
+    response["backend"] = task->backend;
+    response["model"] = task->model;
     send("llm.setup", response, NODE_NO_ERROR, work_id);
     return 0;
   }
@@ -269,7 +294,10 @@ class LlmIpcService : public StackFlows::StackFlow {
     (void)data;
     nlohmann::json response;
     response["service"] = "llm";
-    response["active_tasks"] = tasks_.size();
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      response["active_tasks"] = tasks_.size();
+    }
     send("llm.taskinfo", response, NODE_NO_ERROR, work_id);
   }
 
@@ -278,12 +306,12 @@ class LlmIpcService : public StackFlows::StackFlow {
     (void)object;
     (void)data;
     int work_id_num = StackFlows::sample_get_work_id_num(work_id);
-    auto it = tasks_.find(work_id_num);
-    if (it != tasks_.end()) {
-      if (auto channel = get_channel(work_id_num)) {
-        channel->stop_subscriber_work_id("");
-      }
-      tasks_.erase(it);
+    if (auto channel = get_channel(work_id_num)) {
+      channel->stop_subscriber_work_id("");
+    }
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      tasks_.erase(work_id_num);
     }
     send("llm.exit", "ok", NODE_NO_ERROR, work_id);
     return 0;
@@ -311,11 +339,53 @@ class LlmIpcService : public StackFlows::StackFlow {
     }
   };
 
+  struct InferenceRequest {
+    int work_id_num = 0;
+    std::weak_ptr<StackFlows::NodeChannel> weak_channel;
+    std::string object;
+    std::string data;
+  };
+
   void on_inference(int work_id_num,
                     std::weak_ptr<StackFlows::NodeChannel> weak_channel,
                     const std::string& object, const std::string& data) {
+    {
+      std::scoped_lock lock(queue_mutex_);
+      if (stopping_) {
+        return;
+      }
+      inference_queue_.push_back({work_id_num, std::move(weak_channel), object, data});
+    }
+    queue_cv_.notify_one();
+  }
+
+  void worker_loop(std::stop_token stoken) {
+    while (true) {
+      InferenceRequest request;
+      {
+        std::unique_lock lock(queue_mutex_);
+        queue_cv_.wait(lock, [&] {
+          return stopping_ || stoken.stop_requested() || !inference_queue_.empty();
+        });
+        if (inference_queue_.empty()) {
+          if (stopping_ || stoken.stop_requested()) {
+            break;
+          }
+          continue;
+        }
+        request = std::move(inference_queue_.front());
+        inference_queue_.pop_front();
+      }
+      process_inference(request);
+    }
+  }
+
+  void process_inference(const InferenceRequest& request) {
+    int work_id_num = request.work_id_num;
+    const std::string& object = request.object;
+    const std::string& data = request.data;
     (void)object;
-    auto channel = weak_channel.lock();
+    auto channel = request.weak_channel.lock();
     if (!channel) {
       return;
     }
@@ -328,8 +398,15 @@ class LlmIpcService : public StackFlows::StackFlow {
       return;
     }
 
-    const auto it = tasks_.find(work_id_num);
-    if (it == tasks_.end()) {
+    std::shared_ptr<LlmTask> task;
+    {
+      std::scoped_lock lock(tasks_mutex_);
+      auto it = tasks_.find(work_id_num);
+      if (it != tasks_.end()) {
+        task = it->second;
+      }
+    }
+    if (!task) {
       nlohmann::json error;
       error["code"] = -6;
       error["message"] = "Unit does not exist";
@@ -341,7 +418,7 @@ class LlmIpcService : public StackFlows::StackFlow {
     std::string error_message;
     nlohmann::json metrics;
 #if EDGE_ENABLE_RKLLM
-    if (it->second.runtime) {
+    if (task->runtime) {
       auto delta_sender = [channel](const std::string& delta, size_t index, double first_token_ms) {
         nlohmann::json event;
         event["delta"] = delta;
@@ -350,7 +427,7 @@ class LlmIpcService : public StackFlows::StackFlow {
         event["first_token_ms"] = first_token_ms;
         channel->send("llm.delta", event, NODE_NO_ERROR);
       };
-      if (!it->second.runtime->generate(prompt, text, metrics, delta_sender, error_message)) {
+      if (!task->runtime->generate(prompt, text, metrics, delta_sender, error_message)) {
         nlohmann::json error;
         error["code"] = -53;
         error["message"] = error_message;
@@ -374,15 +451,21 @@ class LlmIpcService : public StackFlows::StackFlow {
     }
 
     nlohmann::json response;
-    response["model"] = it->second.model;
-    response["backend"] = it->second.backend;
+    response["model"] = task->model;
+    response["backend"] = task->backend;
     response["text"] = text;
     response["finish"] = true;
     response["metrics"] = metrics;
     channel->send("llm.response", response, NODE_NO_ERROR);
   }
 
-  std::unordered_map<int, LlmTask> tasks_;
+  std::mutex tasks_mutex_;
+  std::unordered_map<int, std::shared_ptr<LlmTask>> tasks_;
+  std::mutex queue_mutex_;
+  std::condition_variable queue_cv_;
+  std::deque<InferenceRequest> inference_queue_;
+  std::jthread worker_;
+  bool stopping_ = false;
 };
 
 }  // namespace

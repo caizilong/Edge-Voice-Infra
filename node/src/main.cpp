@@ -202,6 +202,13 @@ public:
         }
         int work_id_num = sample_get_work_id_num(work_id);
         auto llm_channel = get_channel(work_id);
+        if (!llm_channel)
+        {
+            error_body["code"] = -6;
+            error_body["message"] = "Unit Does Not Exist";
+            send("None", "None", error_body, work_id);
+            return -1;
+        }
         auto llm_task_obj = std::make_shared<llm_task>(work_id);
         nlohmann::json config_body;
         try
@@ -285,6 +292,13 @@ public:
         }
         llm_task_[work_id_num]->stop();
         auto llm_channel = get_channel(work_id_num);
+        if (!llm_channel)
+        {
+            error_body["code"] = -6;
+            error_body["message"] = "Unit Does Not Exist";
+            send("None", "None", error_body, work_id);
+            return -1;
+        }
         llm_channel->stop_subscriber("");
         llm_task_.erase(work_id_num);
         send("None", "None", LLM_NO_ERROR, work_id);
@@ -301,7 +315,10 @@ public:
                 break;
             }
             iteam->second->stop();
-            get_channel(iteam->first)->stop_subscriber("");
+            if (auto channel = get_channel(iteam->first))
+            {
+                channel->stop_subscriber("");
+            }
             iteam->second.reset();
             llm_task_.erase(iteam->first);
         }

@@ -5,6 +5,8 @@
 #include <iostream>
 #include <atomic>
 
+#include <condition_variable>
+#include <deque>
 #include <eventpp/eventqueue.h>
 #include <functional>
 #include <list>
@@ -27,6 +29,24 @@ private:
     std::unordered_map<int, std::shared_ptr<ZmqEndpoint>> zmq_;
     std::atomic<int> zmq_url_index_;
     std::unordered_map<std::string, int> zmq_url_map_;
+    std::mutex subscriber_mtx_;
+
+    struct SendJob {
+        std::string raw;
+        bool to_pub = false;
+        bool to_usr = false;
+    };
+
+    std::mutex send_mtx_;
+    std::condition_variable send_cv_;
+    std::deque<SendJob> send_queue_;
+    std::jthread send_thread_;
+    bool send_stopping_ = false;
+
+    std::mutex state_mtx_;
+
+    void send_loop(std::stop_token stoken);
+    int enqueue_send(SendJob job);
 
 public:
     std::string unit_name_;
@@ -41,10 +61,22 @@ public:
     NodeChannel(const std::string& _publisher_url, const std::string& inference_url,
                 const std::string& unit_name);
     ~NodeChannel();
-    inline void set_output(bool flage) { enoutput_ = flage; }
-    inline bool get_output() { return enoutput_; }
-    inline void set_stream(bool flage) { enstream_ = flage; }
-    inline bool get_stream() { return enstream_; }
+    inline void set_output(bool flage) {
+        std::scoped_lock lock(state_mtx_);
+        enoutput_ = flage;
+    }
+    inline bool get_output() {
+        std::scoped_lock lock(state_mtx_);
+        return enoutput_;
+    }
+    inline void set_stream(bool flage) {
+        std::scoped_lock lock(state_mtx_);
+        enstream_ = flage;
+    }
+    inline bool get_stream() {
+        std::scoped_lock lock(state_mtx_);
+        return enstream_;
+    }
     
     void subscriber_event_call(
             const std::function<void(const std::string&, const std::string&)>& call, ZmqEndpoint* _ZmqEndpoint,
@@ -61,28 +93,6 @@ public:
     static int send_raw_for_url(const std::string& zmq_url, const std::string& raw);
 
     int send(const std::string& object, const nlohmann::json& data, const std::string& error_msg,
-             const std::string& work_id = "") {
-        nlohmann::json out_body;
-        out_body["request_id"] = request_id_;
-        out_body["work_id"] = work_id.empty() ? work_id_ : work_id;
-        out_body["created"] = time(NULL);
-        out_body["object"] = object;
-        out_body["data"] = data;
-        if (error_msg.empty()) {
-            out_body["error"]["code"] = 0;
-            out_body["error"]["message"] = "";
-        } else {
-            out_body["error"] = error_msg;
-        }
-
-        std::string out = out_body.dump();
-        out += "\n";
-
-        send_raw_to_pub(out);
-        if (enoutput_) {
-            return send_raw_to_usr(out);
-        }
-        return 0;
-    }
+             const std::string& work_id = "");
 };
 }  // namespace StackFlows
